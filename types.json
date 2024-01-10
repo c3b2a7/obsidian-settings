@@ -1,0 +1,18 @@
+{
+  "types": {
+    "aliases": "aliases",
+    "tags": "tags",
+    "cssclasses": "multitext",
+    "title": "text",
+    "author": "text",
+    "level": "text",
+    "status": "text",
+    "date": "date",
+    "created": "datetime",
+    "updated": "datetime",
+    "目的地": "multitext",
+    "景点关键字": "multitext",
+    "结束时间": "datetime",
+    "开始时间": "datetime"
+  }
+}

@@ -1,0 +1,7 @@
+div.mermaid {
+    text-align: center;
+}
+.mermaid svg {
+    width: 95%;
+    height: auto;
+}

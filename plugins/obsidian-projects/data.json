@@ -1,0 +1,278 @@
+{
+  "version": 2,
+  "projects": [
+    {
+      "fieldConfig": {
+        "status": {
+          "options": [
+            "todo",
+            "in progress",
+            "done"
+          ]
+        }
+      },
+      "defaultName": "",
+      "templates": [
+        "Templates/LeetCode.md"
+      ],
+      "excludedNotes": [],
+      "isDefault": false,
+      "dataSource": {
+        "kind": "folder",
+        "config": {
+          "path": "Projects/LeetCode",
+          "recursive": true
+        }
+      },
+      "newNotesFolder": "",
+      "views": [
+        {
+          "config": {
+            "orderFields": [
+              "name",
+              "tags",
+              "level",
+              "status",
+              "link",
+              "date",
+              "created",
+              "modified"
+            ],
+            "fieldConfig": {
+              "name": {
+                "width": 308,
+                "hide": false
+              },
+              "path": {
+                "width": 382,
+                "hide": true
+              },
+              "created": {
+                "width": 186
+              },
+              "title": {
+                "hide": true,
+                "width": 258
+              },
+              "Link": {
+                "width": 275
+              },
+              "tags": {
+                "width": 255
+              },
+              "link": {
+                "width": 236
+              },
+              "level": {
+                "width": 141
+              },
+              "status": {
+                "width": 134
+              },
+              "date": {
+                "width": 139
+              }
+            }
+          },
+          "filter": {
+            "conditions": [
+              {
+                "field": "status",
+                "operator": "is",
+                "enabled": false,
+                "value": "todo"
+              }
+            ]
+          },
+          "colors": {
+            "conditions": [
+              {
+                "color": "#e3e2e0",
+                "condition": {
+                  "field": "status",
+                  "operator": "is",
+                  "enabled": true,
+                  "value": "todo"
+                }
+              },
+              {
+                "color": "#fadec9",
+                "condition": {
+                  "field": "status",
+                  "operator": "is",
+                  "enabled": true,
+                  "value": "in progress"
+                }
+              },
+              {
+                "color": "#dbeddb",
+                "condition": {
+                  "field": "status",
+                  "operator": "is",
+                  "enabled": true,
+                  "value": "done"
+                }
+              }
+            ]
+          },
+          "sort": {
+            "criteria": [
+              {
+                "field": "name",
+                "order": "asc",
+                "enabled": false
+              },
+              {
+                "field": "link",
+                "order": "asc",
+                "enabled": false
+              },
+              {
+                "field": "status",
+                "order": "asc",
+                "enabled": false
+              },
+              {
+                "field": "date",
+                "order": "asc",
+                "enabled": true
+              }
+            ]
+          },
+          "id": "4a1136e9-68cc-47a8-bbcd-cbec1371dc68",
+          "name": "表格",
+          "type": "table"
+        },
+        {
+          "config": {
+            "includeFields": [
+              "link",
+              "level",
+              "tags"
+            ],
+            "columns": {
+              "todo": {
+                "weight": 0
+              },
+              "in progress": {
+                "weight": 1
+              },
+              "done": {
+                "weight": 2
+              }
+            },
+            "columnWidth": 300,
+            "groupByField": "status"
+          },
+          "filter": {
+            "conditions": []
+          },
+          "colors": {
+            "conditions": []
+          },
+          "sort": {
+            "criteria": []
+          },
+          "id": "265de9c6-d266-4e88-b67d-95407362d3e2",
+          "name": "看板",
+          "type": "board"
+        },
+        {
+          "config": {
+            "checkField": "done",
+            "interval": "week"
+          },
+          "filter": {
+            "conditions": []
+          },
+          "colors": {
+            "conditions": []
+          },
+          "sort": {
+            "criteria": []
+          },
+          "id": "6ac20b2d-4508-476f-895c-92b2a80f4148",
+          "name": "日历",
+          "type": "calendar"
+        }
+      ],
+      "id": "10802097-3319-49db-9c4f-bdab3ecec6b6",
+      "name": "🎮 LeetCode"
+    },
+    {
+      "fieldConfig": {},
+      "defaultName": "",
+      "templates": [
+        "Templates/Travel.md"
+      ],
+      "excludedNotes": [],
+      "isDefault": false,
+      "dataSource": {
+        "kind": "folder",
+        "config": {
+          "path": "Projects/Travle",
+          "recursive": true
+        }
+      },
+      "newNotesFolder": "",
+      "views": [
+        {
+          "config": {
+            "fieldConfig": {
+              "path": {
+                "hide": true
+              },
+              "时间": {
+                "width": 422
+              },
+              "title": {
+                "hide": true
+              },
+              "开始时间": {
+                "width": 160
+              },
+              "结束时间": {
+                "width": 153
+              },
+              "出发地": {
+                "width": 139
+              }
+            },
+            "orderFields": [
+              "name",
+              "景点关键字",
+              "出发地",
+              "目的地",
+              "开始时间",
+              "结束时间",
+              "tags"
+            ]
+          },
+          "filter": {
+            "conditions": []
+          },
+          "colors": {
+            "conditions": []
+          },
+          "sort": {
+            "criteria": []
+          },
+          "id": "03491fc8-190b-473f-8751-31b493da972e",
+          "name": "表格",
+          "type": "table"
+        }
+      ],
+      "id": "e3536faa-21e5-4be2-9fb3-bbcfdf06ba98",
+      "name": "🏕️ Travle"
+    }
+  ],
+  "archives": [],
+  "preferences": {
+    "projectSizeLimit": 1000,
+    "frontmatter": {
+      "quoteStrings": "PLAIN"
+    },
+    "commands": [],
+    "linkBehavior": "open-editor"
+  }
+}

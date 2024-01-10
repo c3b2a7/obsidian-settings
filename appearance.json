@@ -1,0 +1,16 @@
+{
+  "accentColor": "",
+  "theme": "system",
+  "monospaceFontFamily": "LXGW WenKai Mono",
+  "textFontFamily": "",
+  "interfaceFontFamily": "LXGW WenKai Mono",
+  "showViewHeader": true,
+  "nativeMenus": false,
+  "translucency": false,
+  "cssTheme": "Border",
+  "enabledCssSnippets": [
+    "stacked-tabs-width",
+    "mermaid"
+  ],
+  "baseFontSize": 18
+}

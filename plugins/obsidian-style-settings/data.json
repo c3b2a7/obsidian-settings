@@ -1,0 +1,11 @@
+{
+  "Appearance-light@@card-layout-open-light": true,
+  "Components@@folder-font-bold": true,
+  "Components@@immersive-canvas": true,
+  "Components@@Ribbon-autohide": true,
+  "Components@@icon-autohide": true,
+  "Components@@file-icon-remove": true,
+  "Editor@@heading-indicator-off": true,
+  "Editor@@callout-border-opacity": 1,
+  "Editor@@callout-border-width": "0 0 0 4px"
+}

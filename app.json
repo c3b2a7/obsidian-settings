@@ -1,0 +1,21 @@
+{
+  "promptDelete": false,
+  "livePreview": true,
+  "readableLineLength": true,
+  "strictLineBreaks": true,
+  "foldHeading": true,
+  "showLineNumber": false,
+  "showIndentGuide": true,
+  "rightToLeft": false,
+  "useTab": false,
+  "alwaysUpdateLinks": true,
+  "useMarkdownLinks": true,
+  "showInlineTitle": false,
+  "attachmentFolderPath": "Attachments",
+  "newLinkFormat": "relative",
+  "newFileLocation": "folder",
+  "spellcheck": true,
+  "showUnsupportedFiles": true,
+  "newFileFolderPath": "Encounters",
+  "propertiesInDocument": "visible"
+}
