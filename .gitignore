@@ -1,5 +1,7 @@
 workspace.json
 workspace-mobile.json
 
+plugins/obsidian-mindmap-nextgen/data.json
+
 .vscode
 .DS_Store
