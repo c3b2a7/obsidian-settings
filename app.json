@@ -17,5 +17,11 @@
   "spellcheck": true,
   "showUnsupportedFiles": true,
   "newFileFolderPath": "Encounters",
-  "propertiesInDocument": "visible"
+  "propertiesInDocument": "visible",
+  "pdfExportSettings": {
+    "pageSize": "Letter",
+    "landscape": false,
+    "margin": "0",
+    "downscalePercent": 100
+  }
 }
