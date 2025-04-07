@@ -1,9 +1,9 @@
 {
   "accentColor": "",
   "theme": "system",
-  "monospaceFontFamily": "LXGW WenKai Mono",
+  "monospaceFontFamily": "",
   "textFontFamily": "",
-  "interfaceFontFamily": "LXGW WenKai Mono",
+  "interfaceFontFamily": "",
   "showViewHeader": true,
   "nativeMenus": false,
   "translucency": false,
