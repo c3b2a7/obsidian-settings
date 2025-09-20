@@ -4064,7 +4064,7 @@ __export(main_exports, {
   default: () => AnotherQuickSwitcher
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian13 = require("obsidian");
+var import_obsidian15 = require("obsidian");
 var import_ts_deepmerge2 = __toESM(require_dist());
 
 // src/app-helper.ts
@@ -4529,8 +4529,17 @@ function smartWhitespaceSplit(text) {
   let hasQuote = false;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
+    const nextCh = text[i + 1];
     switch (ch) {
-      case `"`:
+      case "\\":
+        if (nextCh === '"') {
+          str += '"';
+          i++;
+        } else {
+          str += ch;
+        }
+        break;
+      case '"':
         hasQuote = !hasQuote;
         break;
       case " ":
@@ -4556,45 +4565,189 @@ function hasCapitalLetter(str) {
 }
 function microFuzzy(value, query) {
   if (value.startsWith(query)) {
-    return { type: "starts-with", score: 2 ** query.length / value.length };
+    return {
+      type: "starts-with",
+      score: 2 ** query.length / value.length,
+      ranges: [{ start: 0, end: query.length - 1 }]
+    };
   }
   const emojiLessValue = excludeEmoji(value);
   if (emojiLessValue.startsWith(query)) {
-    return { type: "starts-with", score: 2 ** query.length / value.length };
+    return {
+      type: "starts-with",
+      score: 2 ** query.length / value.length,
+      ranges: [{ start: 0, end: query.length - 1 }]
+    };
   }
-  if (value.includes(query)) {
-    return { type: "includes", score: 2 ** query.length / value.length };
+  const includesIndex = value.indexOf(query);
+  if (includesIndex !== -1) {
+    return {
+      type: "includes",
+      score: 2 ** query.length / value.length,
+      ranges: [{ start: includesIndex, end: includesIndex + query.length - 1 }]
+    };
   }
   let i = 0;
   let scoreSeed = 0;
   let combo = 0;
+  const ranges = [];
+  let rangeStart = -1;
   for (let j = 0; j < emojiLessValue.length; j++) {
     if (emojiLessValue[j] === query[i]) {
+      if (combo === 0) {
+        rangeStart = j;
+      }
       combo++;
       i++;
     } else {
       if (combo > 0) {
         scoreSeed += 2 ** combo;
+        ranges.push({ start: rangeStart, end: rangeStart + combo - 1 });
         combo = 0;
       }
     }
     if (i === query.length) {
       if (combo > 0) {
         scoreSeed += 2 ** combo;
+        ranges.push({ start: rangeStart, end: rangeStart + combo - 1 });
       }
-      return { type: "fuzzy", score: scoreSeed / value.length };
+      return {
+        type: "fuzzy",
+        score: scoreSeed / value.length,
+        ranges
+      };
     }
   }
   return { type: "none", score: 0 };
 }
 function smartMicroFuzzy(text, query, isNormalizeAccentsDiacritics) {
-  return microFuzzy(
-    excludeSpace(normalize(text, isNormalizeAccentsDiacritics)),
-    excludeSpace(normalize(query, isNormalizeAccentsDiacritics))
+  const normalizedText = normalize(text, isNormalizeAccentsDiacritics);
+  const spaceRemovedText = excludeSpace(normalizedText);
+  const emojiRemovedSpaceRemovedText = excludeEmoji(spaceRemovedText);
+  const spaceRemovedQuery = excludeSpace(
+    normalize(query, isNormalizeAccentsDiacritics)
   );
+  const emojiRemovedSpaceRemovedQuery = excludeEmoji(spaceRemovedQuery);
+  if (emojiRemovedSpaceRemovedQuery === "" && spaceRemovedQuery !== "") {
+    if (spaceRemovedText.startsWith(spaceRemovedQuery)) {
+      const emojiCharLength = Array.from(spaceRemovedQuery).length;
+      return {
+        type: "starts-with",
+        score: 0.25,
+        ranges: [{ start: 0, end: emojiCharLength }]
+      };
+    }
+    if (spaceRemovedText.includes(spaceRemovedQuery)) {
+      const index = spaceRemovedText.indexOf(spaceRemovedQuery);
+      const emojiCharLength = Array.from(spaceRemovedQuery).length;
+      return {
+        type: "includes",
+        score: 0.5,
+        ranges: [{ start: index, end: index + emojiCharLength }]
+      };
+    }
+    return { type: "none", score: 0 };
+  }
+  const result = microFuzzy(
+    emojiRemovedSpaceRemovedText,
+    emojiRemovedSpaceRemovedQuery
+  );
+  if (!result.ranges) {
+    return result;
+  }
+  if (spaceRemovedQuery !== emojiRemovedSpaceRemovedQuery && spaceRemovedText.startsWith(spaceRemovedQuery)) {
+    const charLength = Array.from(spaceRemovedQuery).length;
+    return {
+      type: "starts-with",
+      score: result.score * 2,
+      // Boost score for exact prefix match with emoji
+      ranges: [{ start: 0, end: charLength }]
+    };
+  }
+  const mappedRanges = [];
+  const emojiToSpaceRemovedMap = [];
+  let j = 0;
+  spaceRemovedText.replace(regEmoji, (match, offset) => {
+    const startOffset = offset;
+    const endOffset = offset + match.length;
+    for (let i = j; i < startOffset; i++) {
+      emojiToSpaceRemovedMap[emojiToSpaceRemovedMap.length] = i;
+    }
+    j = endOffset;
+    return "";
+  });
+  for (let i = j; i < spaceRemovedText.length; i++) {
+    emojiToSpaceRemovedMap[emojiToSpaceRemovedMap.length] = i;
+  }
+  const spaceRemovedToOriginalMap = [];
+  for (let i = 0, j2 = 0; i < normalizedText.length; i++) {
+    if (normalizedText[i] !== " ") {
+      spaceRemovedToOriginalMap[j2] = i;
+      j2++;
+    }
+  }
+  for (const range2 of result.ranges) {
+    const startInSpaceRemoved = emojiToSpaceRemovedMap[range2.start];
+    let endInSpaceRemoved;
+    if (range2.start === range2.end) {
+      endInSpaceRemoved = startInSpaceRemoved;
+    } else {
+      endInSpaceRemoved = emojiToSpaceRemovedMap[range2.end - 1];
+    }
+    if (startInSpaceRemoved === void 0 || endInSpaceRemoved === void 0) {
+      continue;
+    }
+    const startInOriginal = spaceRemovedToOriginalMap[startInSpaceRemoved];
+    let endInOriginal;
+    if (range2.start === range2.end) {
+      endInOriginal = startInOriginal;
+    } else {
+      endInOriginal = spaceRemovedToOriginalMap[endInSpaceRemoved] + 1;
+    }
+    if (startInOriginal === void 0 || endInOriginal === void 0) {
+      continue;
+    }
+    let currentStart = startInOriginal;
+    for (let i = startInOriginal; i <= endInOriginal; i++) {
+      if (normalizedText[i] === " ") {
+        if (i > currentStart) {
+          mappedRanges.push({ start: currentStart, end: i - 1 });
+        }
+        while (i <= endInOriginal && normalizedText[i] === " ") {
+          i++;
+        }
+        currentStart = i;
+        i--;
+      }
+    }
+    if (currentStart <= endInOriginal) {
+      mappedRanges.push({ start: currentStart, end: endInOriginal });
+    }
+  }
+  return {
+    ...result,
+    ranges: mappedRanges
+  };
 }
 function trimLineByEllipsis(text, max) {
   return text.length > max * 2 ? `${text.slice(0, max)} ... ${text.slice(text.length - max)}` : text;
+}
+function getSinglePatternMatchingLocations(text, pattern) {
+  return Array.from(text.matchAll(pattern)).map((x) => ({
+    text: x[0],
+    range: {
+      start: x.index,
+      end: x.index + x[0].length - 1
+    }
+  }));
+}
+function isValidRegex(pattern) {
+  try {
+    new RegExp(pattern);
+    return true;
+  } catch (e) {
+    return false;
+  }
 }
 
 // src/app-helper.ts
@@ -4613,6 +4766,10 @@ var AppHelper = class {
   }
   getFileViewInActiveLeaf() {
     return this.unsafeApp.workspace.getActiveViewOfType(import_obsidian.FileView);
+  }
+  getActiveFileLeaf() {
+    var _a, _b;
+    return (_b = (_a = this.getFileViewInActiveLeaf()) == null ? void 0 : _a.leaf) != null ? _b : null;
   }
   getMarkdownViewInActiveLeaf() {
     return this.unsafeApp.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
@@ -4927,7 +5084,8 @@ var AppHelper = class {
     if (opt.inplace && opt.leafType === "same-tab") {
       await leaf.setViewState({
         ...leaf.getViewState(),
-        active: !background,
+        active: false,
+        // avoid for conflict
         popstate: true,
         ...this.getOpenState(leaf, file)
       });
@@ -5065,6 +5223,9 @@ var AppHelper = class {
       (x) => x.startsWith(manifestId)
     );
   }
+  getNormalizeVaultRootPath() {
+    return normalizePath(this.unsafeApp.vault.adapter.basePath);
+  }
   getPathToBeCreated(linkText) {
     var _a, _b, _c;
     let linkPath = (0, import_obsidian.getLinkpath)(linkText);
@@ -5160,10 +5321,10 @@ var AppHelper = class {
 };
 
 // src/commands.ts
-var import_obsidian12 = require("obsidian");
+var import_obsidian14 = require("obsidian");
 
 // src/ui/AnotherQuickSwitcherModal.ts
-var import_obsidian4 = require("obsidian");
+var import_obsidian6 = require("obsidian");
 
 // src/keys.ts
 var import_obsidian2 = require("obsidian");
@@ -5280,9 +5441,19 @@ function matchQuery(item, query, options) {
   );
   switch (fuzzyResult.type) {
     case "starts-with":
-      results.push({ type: "prefix-name", meta: [item.file.name], query });
+      results.push({
+        type: "prefix-name",
+        meta: [item.file.name],
+        query,
+        ranges: fuzzyResult.ranges
+      });
     case "includes":
-      results.push({ type: "name", meta: [item.file.name], query });
+      results.push({
+        type: "name",
+        meta: [item.file.name],
+        query,
+        ranges: fuzzyResult.ranges
+      });
     case "fuzzy":
       if (options.fuzzyTarget) {
         if (fuzzyResult.score > options.minFuzzyScore) {
@@ -5290,7 +5461,8 @@ function matchQuery(item, query, options) {
             type: "fuzzy-name",
             meta: [item.file.name],
             query,
-            score: fuzzyResult.score
+            score: fuzzyResult.score,
+            ranges: fuzzyResult.ranges
           });
         }
       }
@@ -5302,44 +5474,68 @@ function matchQuery(item, query, options) {
     const r = smartMicroFuzzy(al, file, isNormalizeAccentsDiacritics);
     switch (r.type) {
       case "starts-with":
-        prefixNameMatchedAliases.push(al);
+        prefixNameMatchedAliases.push({
+          value: al,
+          ranges: r.ranges
+        });
       case "includes":
-        nameMatchedAliases.push(al);
+        nameMatchedAliases.push({
+          value: al,
+          ranges: r.ranges
+        });
       case "fuzzy":
         if (options.fuzzyTarget) {
           if (r.score > options.minFuzzyScore) {
             fuzzyNameMatchedAliases.push({
               value: al,
-              score: r.score
+              score: r.score,
+              ranges: r.ranges
             });
           }
         }
     }
   }
   if (prefixNameMatchedAliases.length > 0) {
+    const bestMatch = minBy(prefixNameMatchedAliases, (x) => x.value.length);
     results.push({
       type: "prefix-name",
-      meta: prefixNameMatchedAliases,
-      alias: minBy(prefixNameMatchedAliases, (x) => x.length),
-      query
+      meta: prefixNameMatchedAliases.map((x) => x.value),
+      alias: bestMatch.value,
+      query,
+      ranges: void 0,
+      allAliasRanges: prefixNameMatchedAliases.map((x) => ({
+        alias: x.value,
+        ranges: x.ranges || []
+      }))
     });
   }
   if (nameMatchedAliases.length > 0) {
+    const bestMatch = minBy(nameMatchedAliases, (x) => x.value.length);
     results.push({
       type: "name",
-      meta: nameMatchedAliases,
-      alias: minBy(nameMatchedAliases, (x) => x.length),
-      query
+      meta: nameMatchedAliases.map((x) => x.value),
+      alias: bestMatch.value,
+      query,
+      ranges: void 0,
+      allAliasRanges: nameMatchedAliases.map((x) => ({
+        alias: x.value,
+        ranges: x.ranges || []
+      }))
     });
   }
   if (options.fuzzyTarget && fuzzyNameMatchedAliases.length > 0) {
-    const m = minBy(fuzzyNameMatchedAliases, (x) => x.score);
+    const bestMatch = minBy(fuzzyNameMatchedAliases, (x) => x.score);
     results.push({
       type: "fuzzy-name",
       meta: fuzzyNameMatchedAliases.map((x) => x.value),
-      alias: m.value,
-      score: m.score,
-      query
+      alias: bestMatch.value,
+      score: bestMatch.score,
+      query,
+      ranges: void 0,
+      allAliasRanges: fuzzyNameMatchedAliases.map((x) => ({
+        alias: x.value,
+        ranges: x.ranges || []
+      }))
     });
   }
   if (smartIncludes((_a = item.file.parent) == null ? void 0 : _a.path, query, isNormalizeAccentsDiacritics)) {
@@ -5685,6 +5881,11 @@ var searchTargetList = [
   "link",
   "2-hop-link"
 ];
+var moveFolderSortPriorityList = [
+  "Recently used",
+  "Alphabetical",
+  "Alphabetical reverse"
+];
 var createDefaultHotkeys = () => ({
   main: {
     up: [{ modifiers: ["Mod"], key: "p" }],
@@ -5699,6 +5900,10 @@ var createDefaultHotkeys = () => ({
     "open in popup": [],
     "open in new tab in background": [{ modifiers: ["Alt"], key: "o" }],
     "open all in new tabs": [{ modifiers: ["Mod", "Shift", "Alt"], key: "o" }],
+    "check/uncheck": [],
+    "check/uncheck and next": [],
+    "check all": [],
+    "uncheck all": [],
     preview: [{ modifiers: ["Mod"], key: "," }],
     create: [{ modifiers: ["Shift"], key: "Enter" }],
     "create in new tab": [{ modifiers: ["Mod", "Shift"], key: "Enter" }],
@@ -5717,6 +5922,9 @@ var createDefaultHotkeys = () => ({
     "navigate forward": [{ modifiers: ["Alt"], key: "ArrowRight" }],
     "navigate back": [{ modifiers: ["Alt"], key: "ArrowLeft" }],
     "close if opened": [],
+    "copy file vault path": [],
+    "copy absolute file path": [],
+    "launch grep": [],
     dismiss: [{ modifiers: [], key: "Escape" }]
   },
   folder: {
@@ -5752,6 +5960,10 @@ var createDefaultHotkeys = () => ({
     "open in popup": [],
     "open in new tab in background": [{ modifiers: ["Alt"], key: "o" }],
     "open all in new tabs": [{ modifiers: ["Mod", "Shift", "Alt"], key: "o" }],
+    "check/uncheck": [],
+    "check/uncheck and next": [],
+    "check all": [],
+    "uncheck all": [],
     "show all results": [{ modifiers: ["Shift", "Alt"], key: "a" }],
     preview: [{ modifiers: ["Mod"], key: "," }],
     dismiss: [{ modifiers: [], key: "Escape" }]
@@ -5774,6 +5986,7 @@ var createDefaultHotkeys = () => ({
   "in-file": {
     up: [{ modifiers: ["Mod"], key: "p" }],
     down: [{ modifiers: ["Mod"], key: "n" }],
+    "insert to editor": [],
     "show all results": [{ modifiers: ["Shift", "Alt"], key: "a" }],
     "toggle auto preview": [{ modifiers: ["Mod"], key: "," }],
     dismiss: [{ modifiers: [], key: "Escape" }]
@@ -5785,6 +5998,7 @@ var createDefaultHotkeys = () => ({
     "clear input": [{ modifiers: ["Mod"], key: "d" }],
     "clear path": [{ modifiers: ["Alt"], key: "d" }],
     "set ./ to path": [{ modifiers: ["Alt"], key: "c" }],
+    "toggle input": [],
     open: [{ modifiers: [], key: "Enter" }],
     "open in new tab": [{ modifiers: ["Mod"], key: "Enter" }],
     "open in new pane (horizontal)": [{ modifiers: ["Mod"], key: "-" }],
@@ -5793,6 +6007,10 @@ var createDefaultHotkeys = () => ({
     "open in popup": [],
     "open in new tab in background": [{ modifiers: ["Alt"], key: "o" }],
     "open all in new tabs": [{ modifiers: ["Mod", "Shift", "Alt"], key: "o" }],
+    "check/uncheck": [],
+    "check/uncheck and next": [],
+    "check all": [],
+    "uncheck all": [],
     preview: [{ modifiers: ["Mod"], key: "," }],
     dismiss: [{ modifiers: [], key: "Escape" }]
   }
@@ -6098,10 +6316,21 @@ var DEFAULT_SETTINGS = {
   // Grep
   ripgrepCommand: "rg",
   grepSearchDelayMilliSeconds: 0,
+  grepMinQueryLength: 1,
   grepExtensions: ["md"],
   maxDisplayLengthAroundMatchedWord: 64,
+  includeFilenameInGrepSearch: false,
+  defaultGrepFolder: "",
+  autoPreviewInGrepSearch: false,
+  grepAutoPreviewDelayMilliSeconds: 300,
+  // Backlink
+  autoPreviewInBacklinkSearch: false,
+  backlinkAutoPreviewDelayMilliSeconds: 300,
   // Move file to another folder
   moveFileExcludePrefixPathPatterns: [],
+  moveFolderSortPriority: "Recently used",
+  moveFileRecentlyUsedFilePath: "",
+  moveFileMaxRecentlyUsedFolders: 10,
   // debug
   showLogAboutPerformanceInConsole: false,
   showFuzzyMatchScore: false
@@ -6699,6 +6928,27 @@ ${invalidValues.map((x) => `- ${x}`).join("\n")}
       el.inputEl.className = "another-quick-switcher__settings__ignore_path_patterns";
       return el;
     });
+    new import_obsidian3.Setting(containerEl).setName("Auto preview").setDesc(
+      "If enabled, automatically shows preview when selecting candidates."
+    ).addToggle((tc) => {
+      tc.setValue(this.plugin.settings.autoPreviewInBacklinkSearch).onChange(
+        async (value) => {
+          this.plugin.settings.autoPreviewInBacklinkSearch = value;
+          await this.plugin.saveSettings();
+          this.display();
+        }
+      );
+    });
+    if (this.plugin.settings.autoPreviewInBacklinkSearch) {
+      new import_obsidian3.Setting(containerEl).setName("Auto preview delay milli-seconds").setDesc(
+        "Delay before auto preview is triggered when selection changes."
+      ).addSlider(
+        (sc) => sc.setLimits(0, 1e3, 50).setValue(this.plugin.settings.backlinkAutoPreviewDelayMilliSeconds).setDynamicTooltip().onChange(async (value) => {
+          this.plugin.settings.backlinkAutoPreviewDelayMilliSeconds = value;
+          await this.plugin.saveSettings();
+        })
+      );
+    }
   }
   addInFileSettings(containerEl) {
     containerEl.createEl("h3", { text: "\u{1F50D} In file search" });
@@ -6737,6 +6987,10 @@ ${invalidValues.map((x) => `- ${x}`).join("\n")}
         await this.plugin.saveSettings();
       })
     );
+    containerEl.createEl("div", {
+      text: "! Please note that on Windows, the initial file access speed may be significantly slower.",
+      cls: "another-quick-switcher__settings__warning"
+    });
     new import_obsidian3.Setting(containerEl).setName("Grep search delay milli-seconds").setDesc(
       "If set to 1 or more, the search will be executed automatically after the specified milliseconds have passed since entering a keyword. If set to 0, the search will only be executed when the hotkey is pressed."
     ).addSlider(
@@ -6745,13 +6999,25 @@ ${invalidValues.map((x) => `- ${x}`).join("\n")}
         await this.plugin.saveSettings();
       })
     );
-    containerEl.createEl("div", {
-      text: "! Please note that on Windows, the initial file access speed may be significantly slower.",
-      cls: "another-quick-switcher__settings__warning"
-    });
+    new import_obsidian3.Setting(containerEl).setName("Minimum query length for auto search").setDesc(
+      "The minimum number of characters required to start an automatic search."
+    ).addSlider(
+      (sc) => sc.setLimits(1, 10, 1).setValue(this.plugin.settings.grepMinQueryLength).setDynamicTooltip().onChange(async (value) => {
+        this.plugin.settings.grepMinQueryLength = value;
+        await this.plugin.saveSettings();
+      })
+    );
     new import_obsidian3.Setting(containerEl).setName("Extensions").addText(
       (tc) => tc.setPlaceholder("(ex: md,html,css)").setValue(this.plugin.settings.grepExtensions.join(",")).onChange(async (value) => {
         this.plugin.settings.grepExtensions = smartCommaSplit(value);
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian3.Setting(containerEl).setName("Default folder").setDesc(
+      "Default folder path for grep searches. Leave empty to use vault root. Use ./ for current directory."
+    ).addText(
+      (tc) => tc.setPlaceholder("(ex: ./, folder/subfolder)").setValue(this.plugin.settings.defaultGrepFolder).onChange(async (value) => {
+        this.plugin.settings.defaultGrepFolder = value;
         await this.plugin.saveSettings();
       })
     );
@@ -6763,6 +7029,36 @@ ${invalidValues.map((x) => `- ${x}`).join("\n")}
         await this.plugin.saveSettings();
       })
     );
+    new import_obsidian3.Setting(containerEl).setName("Include file name in search").setDesc("If enabled, file names are also included in the search target.").addToggle((tc) => {
+      tc.setValue(this.plugin.settings.includeFilenameInGrepSearch).onChange(
+        async (value) => {
+          this.plugin.settings.includeFilenameInGrepSearch = value;
+          await this.plugin.saveSettings();
+          this.display();
+        }
+      );
+    });
+    new import_obsidian3.Setting(containerEl).setName("Auto preview").setDesc(
+      "If enabled, automatically shows preview when selecting candidates."
+    ).addToggle((tc) => {
+      tc.setValue(this.plugin.settings.autoPreviewInGrepSearch).onChange(
+        async (value) => {
+          this.plugin.settings.autoPreviewInGrepSearch = value;
+          await this.plugin.saveSettings();
+          this.display();
+        }
+      );
+    });
+    if (this.plugin.settings.autoPreviewInGrepSearch) {
+      new import_obsidian3.Setting(containerEl).setName("Auto preview delay milli-seconds").setClass("another-quick-switcher__settings__nested").setDesc(
+        "Delay before auto preview is triggered when selection changes."
+      ).addSlider(
+        (sc) => sc.setLimits(0, 1e3, 50).setValue(this.plugin.settings.grepAutoPreviewDelayMilliSeconds).setDynamicTooltip().onChange(async (value) => {
+          this.plugin.settings.grepAutoPreviewDelayMilliSeconds = value;
+          await this.plugin.saveSettings();
+        })
+      );
+    }
   }
   addMoveSettings(containerEl) {
     containerEl.createEl("h3", { text: "\u{1F4C1} Move file to another folder" });
@@ -6777,6 +7073,26 @@ ${invalidValues.map((x) => `- ${x}`).join("\n")}
       });
       el.inputEl.className = "another-quick-switcher__settings__ignore_path_patterns";
       return el;
+    });
+    new import_obsidian3.Setting(containerEl).setName("Folder sort priority").setDesc("How to sort folders in move dialog").addDropdown(
+      (dropdown) => dropdown.addOptions(mirror([...moveFolderSortPriorityList])).setValue(this.plugin.settings.moveFolderSortPriority).onChange(async (value) => {
+        this.plugin.settings.moveFolderSortPriority = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian3.Setting(containerEl).setName("Recently used folders file path").setDesc("Path within vault to store recently used folders history").addText((tc) => {
+      tc.setPlaceholder(
+        ".obsidian/plugins/obsidian-another-quick-switcher/recently-used-folders.json"
+      ).setValue(this.plugin.settings.moveFileRecentlyUsedFilePath).onChange(async (value) => {
+        this.plugin.settings.moveFileRecentlyUsedFilePath = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian3.Setting(containerEl).setName("Max recently used folders").setDesc("Maximum number of recently used folders to remember").addSlider((sc) => {
+      sc.setLimits(5, 50, 5).setValue(this.plugin.settings.moveFileMaxRecentlyUsedFolders).setDynamicTooltip().onChange(async (value) => {
+        this.plugin.settings.moveFileMaxRecentlyUsedFolders = value;
+        await this.plugin.saveSettings();
+      });
     });
   }
   addDebugSettings(containerEl) {
@@ -6818,7 +7134,97 @@ var Logger = class _Logger {
   }
 };
 
+// src/utils/mouse.ts
+var import_obsidian4 = require("obsidian");
+function isModifierClick(evt) {
+  return evt.ctrlKey || import_obsidian4.Platform.isMacOS && evt.metaKey;
+}
+function toLeafType(evt) {
+  return isModifierClick(evt) ? "new-tab" : "same-tab";
+}
+
+// src/ui/AbstractSuggestionModal.ts
+var import_obsidian5 = require("obsidian");
+var AbstractSuggestionModal = class extends import_obsidian5.SuggestModal {
+  constructor() {
+    super(...arguments);
+    this.selectedItemMap = {};
+  }
+  getItems() {
+    var _a;
+    return (_a = this.chooser.values) != null ? _a : null;
+  }
+  getSelectedItem() {
+    var _a, _b;
+    return (_b = (_a = this.getItems()) == null ? void 0 : _a[this.chooser.selectedItem]) != null ? _b : null;
+  }
+  getSelectedElement() {
+    var _a, _b;
+    return (_b = (_a = this.chooser.suggestions) == null ? void 0 : _a[this.chooser.selectedItem]) != null ? _b : null;
+  }
+  getSelected() {
+    return {
+      item: this.getSelectedItem(),
+      element: this.getSelectedElement()
+    };
+  }
+  selectNextItem() {
+    this.chooser.setSelectedItem(this.chooser.selectedItem + 1);
+  }
+  getCheckedItems() {
+    return Object.values(this.selectedItemMap);
+  }
+  async actionMultiItems(action, actionIfItemNotSelected) {
+    const items = this.getCheckedItems();
+    if (items.length > 0) {
+      for (const item2 of items) {
+        await action(item2, "check");
+      }
+      return;
+    }
+    const item = this.getSelectedItem();
+    if (!item) {
+      if (actionIfItemNotSelected) {
+        await actionIfItemNotSelected();
+      }
+      return;
+    }
+    action(item, "select");
+  }
+  async toggleCheckedItem(option) {
+    const { item, element } = this.getSelected();
+    if (!item || !element) {
+      return;
+    }
+    const path = this.toKey(item);
+    if (this.selectedItemMap[path]) {
+      delete this.selectedItemMap[path];
+    } else {
+      this.selectedItemMap[path] = item;
+    }
+    element.empty();
+    this.renderSuggestion(item, element);
+    if (option == null ? void 0 : option.moveNext) {
+      this.selectNextItem();
+    }
+  }
+  checkAll() {
+    var _a;
+    this.selectedItemMap = {};
+    for (const item of (_a = this.chooser.values) != null ? _a : []) {
+      const path = this.toKey(item);
+      this.selectedItemMap[path] = item;
+    }
+    this.updateSuggestions();
+  }
+  uncheckAll() {
+    this.selectedItemMap = {};
+    this.updateSuggestions();
+  }
+};
+
 // src/ui/icons.ts
+var FILE = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 24 24" width="15" height="15"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></g></svg>`;
 var FOLDER = `<svg viewBox="0 0 100 100" class="folder" width="17" height="17"><path fill="currentColor" stroke="currentColor" d="M6.1,8c-3.3,0-6,2.7-6,6v73.8c-0.1,0.5-0.1,0.9,0.1,1.4c0.6,2.7,3,4.8,5.9,4.8h78c3,0,5.4-2.2,5.9-5.1 c0-0.1,0.1-0.2,0.1-0.4c0,0,0-0.1,0-0.1l0.1-0.3c0,0,0,0,0-0.1l9.9-53.6l0.1-0.2V34c0-3.3-2.7-6-6-6v-6c0-3.3-2.7-6-6-6H36.1 c0,0,0,0-0.1,0c-0.1,0-0.2-0.2-0.6-0.6c-0.5-0.6-1.1-1.5-1.7-2.5c-0.6-1-1.3-2.1-2.1-3C30.9,9,29.7,8,28.1,8L6.1,8z M6.1,12h22 c-0.1,0,0.1,0,0.6,0.6c0.5,0.6,1.1,1.5,1.7,2.5c0.6,1,1.3,2.1,2.1,3c0.8,0.9,1.9,1.9,3.6,1.9h52c1.1,0,2,0.9,2,2v6h-74 c-3.1,0-5.7,2.5-5.9,5.6h-0.1L10.1,34l-6,32.4V14C4.1,12.9,4.9,12,6.1,12z M16.1,32h78c1.1,0,2,0.9,2,2l-9.8,53.1l-0.1,0.1 c0,0.1,0,0.2-0.1,0.2c0,0.1,0,0.2-0.1,0.2c0,0,0,0.1,0,0.1c0,0,0,0,0,0.1c0,0.1,0,0.2-0.1,0.3c0,0.1,0,0.1,0,0.2 c0,0.1,0,0.2,0,0.2c-0.3,0.8-1,1.4-1.9,1.4h-78c-1.1,0-2-0.9-2-2L14,34.4l0.1-0.2V34C14.1,32.9,14.9,32,16.1,32L16.1,32z"></path></svg>`;
 var ALIAS = `<svg viewBox="0 0 100 100" class="forward-arrow" width="16" height="16"><path fill="currentColor" stroke="currentColor" d="m9.9,89.09226c-0.03094,0 -0.05414,0 -0.08508,0c-1.06734,-0.04641 -1.91039,-0.92812 -1.89492,-1.99547c0.00774,-0.48726 1.14469,-48.13101 47.52,-49.44586l0,-13.89094c0,-0.7657 0.44086,-1.4618 1.12922,-1.78664c0.68062,-0.33258 1.5082,-0.23203 2.09601,0.2475l31.68,25.74c0.46406,0.37899 0.73476,0.9436 0.73476,1.53914c0,0.59555 -0.2707,1.16016 -0.72703,1.53914l-31.68,25.74c-0.59555,0.47953 -1.41539,0.57234 -2.10375,0.2475c-0.68836,-0.32485 -1.12922,-1.02094 -1.12922,-1.78664l0,-13.84453c-41.26289,0.75024 -43.49039,24.81961 -43.56773,25.85601c-0.06961,1.04414 -0.93586,1.84078 -1.97226,1.84078z"></path></svg>`;
 var TAG = `<svg viewBox="0 0 100 100" class="hashtag" width="17" height="17"><path fill="currentColor" stroke="currentColor" d="M36,18l-1.5,16H20l-0.4,4h14.5l-2.4,26H17.2l-0.4,4h14.5L30,82h4l1.3-14h26L60,82h4l1.3-14h15.5l0.4-4H65.7l2.4-26h15.5 l0.4-4H68.5L70,18h-4l-1.5,16h-26L40,18L36,18z M38.1,38h26l-2.4,26h-26L38.1,38z"></path></svg>`;
@@ -6878,11 +7284,67 @@ function round(n, decimalPlace) {
 }
 
 // src/ui/suggestion-factory.ts
-function createItemDiv(item, aliasesDisplayedAsTitle, options) {
+function mergeRanges(ranges) {
+  if (ranges.length === 0) return [];
+  const sorted = [...ranges].sort((a, b) => a.start - b.start);
+  const merged = [];
+  let current = sorted[0];
+  for (let i = 1; i < sorted.length; i++) {
+    const next = sorted[i];
+    if (next.start <= current.end + 1) {
+      current = {
+        start: current.start,
+        end: Math.max(current.end, next.end)
+      };
+    } else {
+      merged.push(current);
+      current = next;
+    }
+  }
+  merged.push(current);
+  return merged;
+}
+function createHighlightedText(text, ranges) {
+  const fragment = document.createDocumentFragment();
+  if (!ranges || ranges.length === 0) {
+    fragment.appendChild(document.createTextNode(text));
+    return fragment;
+  }
+  const mergedRanges = mergeRanges(ranges);
+  let lastEnd = -1;
+  for (const range2 of mergedRanges) {
+    if (range2.start > lastEnd + 1) {
+      const beforeText = text.slice(lastEnd + 1, range2.start);
+      if (beforeText) {
+        const textSpan = createSpan({ text: beforeText });
+        fragment.appendChild(textSpan);
+      }
+    }
+    const highlightedText = text.slice(range2.start, range2.end + 1);
+    if (highlightedText) {
+      const highlightSpan = createSpan({
+        cls: "another-quick-switcher__hit_word",
+        text: highlightedText
+      });
+      fragment.appendChild(highlightSpan);
+    }
+    lastEnd = range2.end;
+  }
+  if (lastEnd + 1 < text.length) {
+    const remainingText = text.slice(lastEnd + 1);
+    if (remainingText) {
+      const textSpan = createSpan({ text: remainingText });
+      fragment.appendChild(textSpan);
+    }
+  }
+  return fragment;
+}
+function createItemDiv(item, aliases, isTitleMatched, options) {
   var _a, _b;
   const itemDiv = createDiv({
     cls: [
       "another-quick-switcher__item",
+      options.selected ? "another-quick-switcher__item__selected" : "",
       item.phantom ? "another-quick-switcher__phantom_item" : "",
       item.starred ? "another-quick-switcher__starred_item" : "",
       options.hideGutterIcons ? "another-quick-switcher__gutter_hidden" : ""
@@ -6894,14 +7356,47 @@ function createItemDiv(item, aliasesDisplayedAsTitle, options) {
   const entryDiv = createDiv({
     cls: "another-quick-switcher__item__entry"
   });
-  const shouldShowAliasAsTitle = aliasesDisplayedAsTitle.length > 0 && (options.displayAliaseAsTitle || options.displayAliasAsTitleOnKeywordMatched);
   const titleDiv = createDiv({
     cls: [
       "another-quick-switcher__item__title",
       "another-quick-switcher__custom__item__title"
-    ],
-    text: shouldShowAliasAsTitle ? aliasesDisplayedAsTitle.join(" / ") : item.file.basename
+    ]
   });
+  const shouldShowAliasAsTitle = aliases.length > 0 && (options.displayAliaseAsTitle || !isTitleMatched && options.displayAliasAsTitleOnKeywordMatched);
+  const titleText = shouldShowAliasAsTitle ? aliases.join(" | ") : item.file.basename;
+  const allRanges = [];
+  for (const result of item.matchResults) {
+    if (shouldShowAliasAsTitle) {
+      if (result.allAliasRanges) {
+        for (const alias of aliases) {
+          const aliasRange = result.allAliasRanges.find(
+            (a) => a.alias === alias
+          );
+          if (aliasRange) {
+            const offset = aliases.slice(0, aliases.indexOf(alias)).reduce((acc, cur) => acc + cur.length + 3, 0);
+            for (const range2 of aliasRange.ranges) {
+              allRanges.push({
+                start: range2.start + offset,
+                end: range2.end + offset
+              });
+            }
+          }
+        }
+      }
+    } else {
+      if (result.ranges) {
+        allRanges.push(...result.ranges);
+      }
+    }
+  }
+  if (shouldShowAliasAsTitle) {
+    titleDiv.insertAdjacentHTML("beforeend", ALIAS);
+  }
+  const highlightedContent = createHighlightedText(
+    titleText,
+    allRanges.length > 0 ? allRanges : void 0
+  );
+  titleDiv.appendChild(highlightedContent);
   entryDiv.appendChild(titleDiv);
   const isExcalidrawFile = isExcalidraw(item.file);
   if (item.file.extension !== "md" || isExcalidrawFile) {
@@ -6981,13 +7476,17 @@ function createMetaDiv(args) {
         title: key,
         text: key
       });
+      const frontMatterValueDiv = createDiv({
+        cls: "another-quick-switcher__item__meta__front_matter__values"
+      });
       for (const v of [value].flat().filter(isPresent)) {
-        frontMatterDiv.createSpan({
+        frontMatterValueDiv.createSpan({
           cls: "another-quick-switcher__item__meta__front_matter__value",
           title: v.toString(),
           text: v.toString()
         });
       }
+      frontMatterDiv.appendChild(frontMatterValueDiv);
       frontMattersDiv.appendChild(frontMatterDiv);
     }
     metaDiv.appendChild(frontMattersDiv);
@@ -7003,22 +7502,50 @@ function createDescriptionDiv(args) {
     countByHeader,
     linkResultsNum,
     headerResultsNum,
+    isTitleMatched,
     options
   } = args;
   const descriptionDiv = createDiv({
     cls: "another-quick-switcher__item__descriptions"
   });
+  const shouldShowFileAsDescription = !isTitleMatched && options.displayAliasAsTitleOnKeywordMatched || options.displayAliaseAsTitle;
   if (aliases.length > 0) {
     const aliasDiv = createDiv({
       cls: "another-quick-switcher__item__description"
     });
-    const displayAliases = options.displayAliasAsTitleOnKeywordMatched ? [item.file.basename] : aliases;
+    const displayAliases = shouldShowFileAsDescription ? [item.file.basename] : aliases;
     for (const x of displayAliases) {
       const aliasSpan = createSpan({
         cls: "another-quick-switcher__item__description__alias"
       });
-      aliasSpan.insertAdjacentHTML("beforeend", ALIAS);
-      aliasSpan.appendText(x);
+      aliasSpan.insertAdjacentHTML(
+        "beforeend",
+        shouldShowFileAsDescription ? FILE : ALIAS
+      );
+      const ranges = [];
+      for (const result of item.matchResults) {
+        if (shouldShowFileAsDescription) {
+          if (result.ranges) {
+            for (const range2 of result.ranges) {
+              ranges.push(range2);
+            }
+          }
+        } else {
+          if (result.allAliasRanges) {
+            for (const aliasRange of result.allAliasRanges) {
+              if (aliasRange.alias === x) {
+                ranges.push(...aliasRange.ranges);
+              }
+            }
+          }
+        }
+      }
+      const highlightedContent = createHighlightedText(x, ranges);
+      const aliasInnerSpan = createSpan({
+        cls: "another-quick-switcher__item__description__alias__inner"
+      });
+      aliasInnerSpan.appendChild(highlightedContent);
+      aliasSpan.appendChild(aliasInnerSpan);
       aliasDiv.appendChild(aliasSpan);
     }
     descriptionDiv.appendChild(aliasDiv);
@@ -7081,13 +7608,10 @@ function createDescriptionDiv(args) {
 }
 function createElements(item, options) {
   var _a;
-  const { title, aliases } = getMatchedTitleAndAliases(item);
-  const matchedAliasesOnly = title ? [] : aliases;
-  const itemDiv = createItemDiv(
-    item,
-    options.displayAliaseAsTitle ? item.aliases : matchedAliasesOnly,
-    options
-  );
+  const { title, aliases: matchedAliases } = getMatchedTitleAndAliases(item);
+  const isTitleMatched = Boolean(title);
+  const essenceAliases = options.displayAliaseAsTitle ? item.aliases : matchedAliases;
+  const itemDiv = createItemDiv(item, essenceAliases, isTitleMatched, options);
   const frontMatter = omitBy(
     (_a = item.frontMatter) != null ? _a : {},
     (key, value) => options.excludeFrontMatterKeys.includes(key) || value == null
@@ -7127,28 +7651,25 @@ function createElements(item, options) {
       return uniq((_a2 = xs.meta) != null ? _a2 : []);
     })
   );
-  const descriptionDiv = aliases.length !== 0 || tags.length !== 0 || Object.keys(countByLink).length !== 0 || Object.keys(countByHeader).length !== 0 ? createDescriptionDiv({
+  const descriptionDiv = essenceAliases.length !== 0 || tags.length !== 0 || Object.keys(countByLink).length !== 0 || Object.keys(countByHeader).length !== 0 ? createDescriptionDiv({
     item,
-    aliases: matchedAliasesOnly,
+    aliases: essenceAliases,
     tags,
     countByLink,
     countByHeader,
     linkResultsNum,
     headerResultsNum,
+    isTitleMatched,
     options
   }) : void 0;
-  return {
-    itemDiv,
-    metaDiv,
-    descriptionDiv
-  };
+  return { itemDiv, metaDiv, descriptionDiv };
 }
 
 // src/ui/AnotherQuickSwitcherModal.ts
 var globalInternalStorage = {
   query: ""
 };
-var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_obsidian4.SuggestModal {
+var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends AbstractSuggestionModal {
   constructor(args) {
     var _a;
     super(args.app);
@@ -7186,7 +7707,7 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
       tokens: x.basename.split(" ")
     }));
     this.indexingItems();
-    this.debounceGetSuggestions = (0, import_obsidian4.debounce)(
+    this.debounceGetSuggestions = (0, import_obsidian6.debounce)(
       (query, cb) => {
         cb(this._getSuggestions(query));
       },
@@ -7194,8 +7715,11 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
       true
     );
   }
+  toKey(item) {
+    return item.file.path;
+  }
   close() {
-    if (import_obsidian4.Platform.isMobile) {
+    if (import_obsidian6.Platform.isMobile) {
       this.onClose();
     }
     super.close();
@@ -7241,7 +7765,7 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
   }
   enableFloating() {
     this.floating = true;
-    if (!import_obsidian4.Platform.isPhone) {
+    if (!import_obsidian6.Platform.isPhone) {
       setFloatingModal(this.appHelper);
     }
   }
@@ -7260,10 +7784,10 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
       const cache = this.app.metadataCache.getFileCache(x);
       return {
         file: x,
-        aliases: (_a2 = (0, import_obsidian4.parseFrontMatterAliases)(cache.frontmatter)) != null ? _a2 : [],
+        aliases: (_a2 = (0, import_obsidian6.parseFrontMatterAliases)(cache.frontmatter)) != null ? _a2 : [],
         tags: this.command.searchBy.tag ? uniq([
           ...((_b = cache.tags) != null ? _b : []).map((x2) => x2.tag),
-          ...(_c = (0, import_obsidian4.parseFrontMatterTags)(cache.frontmatter)) != null ? _c : []
+          ...(_c = (0, import_obsidian6.parseFrontMatterTags)(cache.frontmatter)) != null ? _c : []
         ]) : [],
         headers: this.command.searchBy.header ? ((_d = cache.headings) != null ? _d : []).map((x2) => excludeFormat(x2.heading)) : [],
         links: this.command.searchBy.link ? uniq(
@@ -7381,13 +7905,13 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
       this.indexingItems();
     }
     this.searchQuery = query.startsWith(this.command.commandPrefix) ? query.replace(this.command.commandPrefix, "") : query;
+    if (this.command.defaultInput) {
+      this.searchQuery = `${this.command.defaultInput}${this.searchQuery}`;
+    }
     this.searchQuery = this.searchQuery.replace(
       /<cd>/g,
       this.appHelper.getCurrentDirPath()
     );
-    if (this.command.defaultInput) {
-      this.searchQuery = `${this.command.defaultInput}${this.searchQuery}`;
-    }
     this.renderInputComponent();
     const qs = smartWhitespaceSplit(this.searchQuery);
     if (this.command.searchTarget === "backlink" && !((_a = this.originFile) == null ? void 0 : _a.path)) {
@@ -7488,7 +8012,8 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
       displayAliaseAsTitle: this.settings.displayAliaseAsTitle,
       displayDescriptionBelowTitle: this.settings.displayDescriptionBelowTitle,
       hideGutterIcons: this.settings.hideGutterIcons,
-      showFuzzyMatchScore: this.settings.showFuzzyMatchScore
+      showFuzzyMatchScore: this.settings.showFuzzyMatchScore,
+      selected: Boolean(this.selectedItemMap[this.toKey(item)])
     });
     if (metaDiv == null ? void 0 : metaDiv.hasChildNodes()) {
       itemDiv.appendChild(metaDiv);
@@ -7527,8 +8052,8 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
     this.navQueue = this.navQueue.then(cb);
   }
   async chooseCurrentSuggestion(leafType, option = {}) {
-    var _a, _b, _c, _d, _e, _f;
-    const item = (_a = this.chooser.values) == null ? void 0 : _a[this.chooser.selectedItem];
+    var _a, _b, _c, _d, _e;
+    const item = this.getSelectedItem();
     if (!item) {
       return null;
     }
@@ -7540,15 +8065,15 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
     let leafPriorToSameTab;
     switch (this.command.searchTarget) {
       case "file":
-        if (((_b = item.matchResults[0]) == null ? void 0 : _b.type) === "header") {
+        if (((_a = item.matchResults[0]) == null ? void 0 : _a.type) === "header") {
           const firstHeader = item.matchResults[0].meta[0];
-          offset = (_c = this.appHelper.findFirstHeaderOffset(item.file, firstHeader)) != null ? _c : void 0;
+          offset = (_b = this.appHelper.findFirstHeaderOffset(item.file, firstHeader)) != null ? _b : void 0;
         }
         break;
       case "opened file":
-        if (((_d = item.matchResults[0]) == null ? void 0 : _d.type) === "header") {
+        if (((_c = item.matchResults[0]) == null ? void 0 : _c.type) === "header") {
           const firstHeader = item.matchResults[0].meta[0];
-          offset = (_e = this.appHelper.findFirstHeaderOffset(item.file, firstHeader)) != null ? _e : void 0;
+          offset = (_d = this.appHelper.findFirstHeaderOffset(item.file, firstHeader)) != null ? _d : void 0;
         }
         this.appHelper.getFilePathsInActiveWindow;
         leafPriorToSameTab = this.appHelper.findLeaf(fileToOpened);
@@ -7570,7 +8095,7 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
       this.close();
       this.navigate(() => this.isClosed);
     } else if (leafType === "same-tab") {
-      (_f = this.stateToRestore) != null ? _f : this.stateToRestore = this.appHelper.captureState(this.initialLeaf);
+      (_e = this.stateToRestore) != null ? _e : this.stateToRestore = this.appHelper.captureState(this.initialLeaf);
     }
     this.navigate(
       () => this.appHelper.openFile(
@@ -7587,8 +8112,8 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
     );
     return fileToOpened;
   }
-  async onChooseSuggestion() {
-    await this.chooseCurrentSuggestion("same-tab");
+  async onChooseSuggestion(item, evt) {
+    await this.chooseCurrentSuggestion(toLeafType(evt));
   }
   async handleCreateNewMarkdown(searchQuery, leafType) {
     if (!searchQuery) {
@@ -7596,7 +8121,7 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
     }
     const file = await this.appHelper.createMarkdown(this.searchQuery);
     if (!file) {
-      new import_obsidian4.Notice("This file already exists.");
+      new import_obsidian6.Notice("This file already exists.");
       return true;
     }
     this.close();
@@ -7655,7 +8180,18 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
       }
     });
     this.registerKeys("open", async () => {
-      await this.chooseCurrentSuggestion("same-tab");
+      const items = this.getCheckedItems();
+      if (items.length > 0) {
+        this.close();
+        for (const x of items) {
+          this.appHelper.openFile(x.file, {
+            leafType: "new-tab",
+            preventDuplicateTabs: this.settings.preventDuplicateTabs
+          });
+        }
+      } else {
+        await this.chooseCurrentSuggestion("same-tab");
+      }
     });
     this.registerKeys("open in new tab", async () => {
       await this.chooseCurrentSuggestion("new-tab");
@@ -7679,12 +8215,12 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
     });
     this.registerKeys("open all in new tabs", () => {
       this.close();
-      if (this.chooser.values == null) {
+      const items = this.getItems();
+      if (!items) {
         return;
       }
-      const items = this.chooser.values.slice().reverse();
-      for (const x of items) {
-        this.appHelper.openFile(x.file, {
+      for (const item of items) {
+        this.appHelper.openFile(item.file, {
           leafType: "new-tab-background",
           preventDuplicateTabs: this.settings.preventDuplicateTabs
         });
@@ -7710,22 +8246,28 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
     this.registerKeys("create in new popup", async () => {
       await this.handleCreateNewMarkdown(this.searchQuery, "popup");
     });
+    this.registerKeys("check/uncheck", async () => {
+      await this.toggleCheckedItem();
+    });
+    this.registerKeys("check/uncheck and next", async () => {
+      await this.toggleCheckedItem({ moveNext: true });
+    });
+    this.registerKeys("check all", () => {
+      this.checkAll();
+    });
+    this.registerKeys("uncheck all", () => {
+      this.uncheckAll();
+    });
     this.registerKeys("open in default app", () => {
-      var _a, _b;
-      const file = (_b = (_a = this.chooser.values) == null ? void 0 : _a[this.chooser.selectedItem]) == null ? void 0 : _b.file;
-      if (!file) {
-        return;
-      }
-      this.appHelper.openFileInDefaultApp(file);
+      this.actionMultiItems((item) => {
+        this.appHelper.openFileInDefaultApp(item.file);
+      });
       this.close();
     });
     this.registerKeys("show in system explorer", () => {
-      var _a, _b;
-      const file = (_b = (_a = this.chooser.values) == null ? void 0 : _a[this.chooser.selectedItem]) == null ? void 0 : _b.file;
-      if (!file) {
-        return;
-      }
-      this.appHelper.openInSystemExplorer(file);
+      this.actionMultiItems((item) => {
+        this.appHelper.openInSystemExplorer(item.file);
+      });
       this.close();
     });
     this.registerKeys("open in google", () => {
@@ -7733,21 +8275,18 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
       this.close();
     });
     this.registerKeys("open first URL", async () => {
-      var _a, _b;
-      const fileToOpened = (_b = (_a = this.chooser.values) == null ? void 0 : _a[this.chooser.selectedItem]) == null ? void 0 : _b.file;
-      if (!fileToOpened) {
-        return;
-      }
       this.close();
       await this.isClosed;
-      const urls = await this.appHelper.findExternalLinkUrls(fileToOpened);
-      if (urls.length > 0) {
-        activeWindow.open(urls[0]);
-      } else {
-        this.appHelper.openFile(fileToOpened, {
-          leafType: "same-tab"
-        });
-      }
+      this.actionMultiItems(async (item, mode) => {
+        const urls = await this.appHelper.findExternalLinkUrls(item.file);
+        if (urls.length > 0) {
+          activeWindow.open(urls[0]);
+        } else {
+          this.appHelper.openFile(item.file, {
+            leafType: mode === "select" ? "same-tab" : "new-tab"
+          });
+        }
+      });
     });
     const insertLinkToActiveMarkdownFile = (file, item) => {
       const saat = this.settings.searchesAutoAliasTransform;
@@ -7769,23 +8308,39 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
       );
     };
     this.registerKeys("insert to editor", async () => {
-      var _a;
-      const item = (_a = this.chooser.values) == null ? void 0 : _a[this.chooser.selectedItem];
-      if (!item) {
-        insertPhantomLinkToActiveMarkdownFile(this.searchQuery);
-        await this.safeClose();
-        return;
-      }
-      const file = item.file;
-      if (!file) {
-        return;
-      }
-      await this.safeClose();
-      if (this.appHelper.isActiveLeafCanvas()) {
-        this.appHelper.addFileToCanvas(file);
-      } else {
-        insertLinkToActiveMarkdownFile(file, item);
-      }
+      let offsetX = 0;
+      this.actionMultiItems(
+        async (item, mode) => {
+          await this.safeClose();
+          switch (mode) {
+            case "select":
+              if (this.appHelper.isActiveLeafCanvas()) {
+                this.appHelper.addFileToCanvas(item.file);
+              } else {
+                insertLinkToActiveMarkdownFile(item.file, item);
+              }
+              break;
+            case "check":
+              if (this.appHelper.isActiveLeafCanvas()) {
+                const cv = this.appHelper.addFileToCanvas(item.file, {
+                  x: offsetX,
+                  y: 0
+                });
+                offsetX += cv.width + 30;
+              } else {
+                insertLinkToActiveMarkdownFile(item.file, item);
+                this.appHelper.insertStringToActiveFile("\n");
+              }
+              break;
+            default:
+              throw new ExhaustiveError(mode);
+          }
+        },
+        async () => {
+          insertPhantomLinkToActiveMarkdownFile(this.searchQuery);
+          await this.safeClose();
+        }
+      );
     });
     this.registerKeys("insert to editor in background", async () => {
       var _a;
@@ -7902,12 +8457,12 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
       navigate(this.currentNavigationHistoryIndex + 1);
     });
     this.registerKeys("close if opened", () => {
-      var _a, _b;
-      const file = (_b = (_a = this.chooser.values) == null ? void 0 : _a[this.chooser.selectedItem]) == null ? void 0 : _b.file;
-      if (!file) {
-        return;
-      }
-      this.appHelper.closeFile(file);
+      this.actionMultiItems(async (item, mode) => {
+        this.appHelper.closeFile(item.file);
+        if (mode === "check") {
+          this.close();
+        }
+      });
     });
     const modifierKey = this.settings.userAltInsteadOfModForQuickResultSelection ? "Alt" : "Mod";
     for (const n of [1, 2, 3, 4, 5, 6, 7, 8, 9]) {
@@ -7917,6 +8472,38 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
         return false;
       });
     }
+    this.registerKeys("launch grep", async () => {
+      const currentQuery = this.inputEl.value.trim();
+      await this.safeClose();
+      await showGrepDialog(this.app, this.settings, currentQuery || void 0);
+    });
+    this.registerKeys("copy file vault path", async () => {
+      var _a;
+      const item = (_a = this.chooser.values) == null ? void 0 : _a[this.chooser.selectedItem];
+      if (!item) {
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(item.file.path);
+        new import_obsidian6.Notice("Vault path copied to clipboard");
+      } catch (error) {
+        new import_obsidian6.Notice("Failed to copy vault path to clipboard");
+      }
+    });
+    this.registerKeys("copy absolute file path", async () => {
+      var _a;
+      const item = (_a = this.chooser.values) == null ? void 0 : _a[this.chooser.selectedItem];
+      if (!item) {
+        return;
+      }
+      try {
+        const basePath = this.appHelper.getNormalizeVaultRootPath();
+        await navigator.clipboard.writeText(`${basePath}/${item.file.path}`);
+        new import_obsidian6.Notice("Absolute file path copied to clipboard");
+      } catch (error) {
+        new import_obsidian6.Notice("Failed to copy absolute file path to clipboard");
+      }
+    });
     this.registerKeys("dismiss", async () => {
       this.close();
     });
@@ -7924,8 +8511,8 @@ var AnotherQuickSwitcherModal = class _AnotherQuickSwitcherModal extends import_
 };
 
 // src/ui/BacklinkModal.ts
-var import_obsidian5 = require("obsidian");
-var BacklinkModal = class extends import_obsidian5.SuggestModal {
+var import_obsidian7 = require("obsidian");
+var BacklinkModal = class extends AbstractSuggestionModal {
   constructor(app, settings, initialLeaf) {
     super(app);
     this.lastOpenFileIndexByPath = {};
@@ -7949,7 +8536,7 @@ var BacklinkModal = class extends import_obsidian5.SuggestModal {
       this.lastOpenFileIndexByPath[v] = i;
     });
     this.setHotkeys();
-    this.debounceGetSuggestions = (0, import_obsidian5.debounce)(
+    this.debounceGetSuggestions = (0, import_obsidian7.debounce)(
       (query, cb) => {
         cb(this._getSuggestions(query));
       },
@@ -7957,24 +8544,58 @@ var BacklinkModal = class extends import_obsidian5.SuggestModal {
       true
     );
   }
+  toKey(item) {
+    return `${item.file.path}:${item.lineNumber}`;
+  }
   async init() {
     await this.indexingItems();
   }
   onOpen() {
+    var _a;
     super.onOpen();
-    if (!import_obsidian5.Platform.isPhone) {
+    if (!import_obsidian7.Platform.isPhone) {
       setFloatingModal(this.appHelper);
     }
     this.opened = true;
+    if (this.settings.autoPreviewInBacklinkSearch) {
+      this.debouncePreview = (0, import_obsidian7.debounce)(
+        this.preview,
+        this.settings.backlinkAutoPreviewDelayMilliSeconds,
+        true
+      );
+      this.debouncePreviewCancelListener = () => {
+        var _a2;
+        (_a2 = this.debouncePreview) == null ? void 0 : _a2.cancel();
+      };
+      const originalSetSelectedItem = this.chooser.setSelectedItem.bind(
+        this.chooser
+      );
+      this.chooser.setSelectedItem = (selectedIndex, evt) => {
+        var _a2;
+        originalSetSelectedItem(selectedIndex, evt);
+        (_a2 = this.debouncePreview) == null ? void 0 : _a2.call(this);
+      };
+      this.inputEl.addEventListener(
+        "keydown",
+        this.debouncePreviewCancelListener
+      );
+      (_a = this.debouncePreview) == null ? void 0 : _a.call(this);
+    }
   }
   close() {
-    if (import_obsidian5.Platform.isMobile) {
+    if (import_obsidian7.Platform.isMobile) {
       this.onClose();
     }
     super.close();
   }
   onClose() {
+    var _a;
     super.onClose();
+    (_a = this.debouncePreview) == null ? void 0 : _a.cancel();
+    this.inputEl.removeEventListener(
+      "keydown",
+      this.debouncePreviewCancelListener
+    );
     if (this.stateToRestore) {
       this.navigate(() => this.stateToRestore.restore());
     }
@@ -8070,7 +8691,10 @@ var BacklinkModal = class extends import_obsidian5.SuggestModal {
     const previousPath = (_a = this.suggestions[item.order - 1]) == null ? void 0 : _a.file.path;
     const sameFileWithPrevious = previousPath === item.file.path;
     const itemDiv = createDiv({
-      cls: "another-quick-switcher__item"
+      cls: [
+        "another-quick-switcher__item",
+        this.selectedItemMap[this.toKey(item)] ? "another-quick-switcher__item__selected" : ""
+      ].filter((x) => x)
     });
     const entryDiv = createDiv({
       cls: "another-quick-switcher__item__entry"
@@ -8156,8 +8780,8 @@ var BacklinkModal = class extends import_obsidian5.SuggestModal {
     this.navQueue = this.navQueue.then(cb);
   }
   async chooseCurrentSuggestion(leaf, option = {}) {
-    var _a, _b;
-    const item = (_a = this.chooser.values) == null ? void 0 : _a[this.chooser.selectedItem];
+    var _a;
+    const item = this.getSelectedItem();
     if (!item) {
       return null;
     }
@@ -8165,7 +8789,7 @@ var BacklinkModal = class extends import_obsidian5.SuggestModal {
       this.close();
       this.navigate(() => this.isClosed);
     } else if (leaf === "same-tab") {
-      (_b = this.stateToRestore) != null ? _b : this.stateToRestore = this.appHelper.captureState(this.initialLeaf);
+      (_a = this.stateToRestore) != null ? _a : this.stateToRestore = this.appHelper.captureState(this.initialLeaf);
     }
     this.navigate(
       () => this.appHelper.openFile(
@@ -8181,8 +8805,13 @@ var BacklinkModal = class extends import_obsidian5.SuggestModal {
     );
     return item.file;
   }
-  async onChooseSuggestion() {
-    await this.chooseCurrentSuggestion("same-tab");
+  async onChooseSuggestion(item, evt) {
+    await this.chooseCurrentSuggestion(toLeafType(evt));
+  }
+  async preview() {
+    await this.chooseCurrentSuggestion("same-tab", {
+      keepOpen: true
+    });
   }
   registerKeys(key, handler) {
     const hotkeys = this.settings.hotkeys.backlink[key];
@@ -8226,7 +8855,20 @@ var BacklinkModal = class extends import_obsidian5.SuggestModal {
       );
     });
     this.registerKeys("open", async () => {
-      await this.chooseCurrentSuggestion("same-tab");
+      const items = this.getCheckedItems();
+      if (items.length > 0) {
+        this.close();
+        for (const x of items.slice()) {
+          await this.appHelper.openFile(x.file, {
+            leafType: "new-tab",
+            line: x.lineNumber - 1,
+            preventDuplicateTabs: this.settings.preventDuplicateTabs
+          });
+          await sleep(0);
+        }
+      } else {
+        await this.chooseCurrentSuggestion("same-tab");
+      }
     });
     this.registerKeys("open in new tab", async () => {
       await this.chooseCurrentSuggestion("new-tab");
@@ -8248,28 +8890,39 @@ var BacklinkModal = class extends import_obsidian5.SuggestModal {
         keepOpen: true
       });
     });
-    this.registerKeys("open all in new tabs", () => {
+    this.registerKeys("open all in new tabs", async () => {
       this.close();
-      if (this.chooser.values == null) {
+      const items = this.getItems();
+      if (!items) {
         return;
       }
-      const items = this.chooser.values.slice().reverse();
-      for (const x of items) {
-        this.appHelper.openFile(x.file, {
-          leafType: "new-tab-background",
+      this.getSelectedItem();
+      for (const item of items) {
+        await this.appHelper.openFile(item.file, {
+          leafType: "new-tab",
+          line: item.lineNumber - 1,
           preventDuplicateTabs: this.settings.preventDuplicateTabs
         });
+        await sleep(0);
       }
+    });
+    this.registerKeys("check/uncheck", async () => {
+      await this.toggleCheckedItem();
+    });
+    this.registerKeys("check/uncheck and next", async () => {
+      await this.toggleCheckedItem({ moveNext: true });
+    });
+    this.registerKeys("check all", () => {
+      this.checkAll();
+    });
+    this.registerKeys("uncheck all", () => {
+      this.uncheckAll();
     });
     this.registerKeys("show all results", () => {
       this.limit = Number.MAX_SAFE_INTEGER;
       this.inputEl.dispatchEvent(new Event("input"));
     });
-    this.registerKeys("preview", async () => {
-      await this.chooseCurrentSuggestion("same-tab", {
-        keepOpen: true
-      });
-    });
+    this.registerKeys("preview", () => this.preview());
     const modifierKey = this.settings.userAltInsteadOfModForQuickResultSelection ? "Alt" : "Mod";
     for (const n of [1, 2, 3, 4, 5, 6, 7, 8, 9]) {
       this.scope.register([modifierKey], String(n), (evt) => {
@@ -8285,7 +8938,7 @@ var BacklinkModal = class extends import_obsidian5.SuggestModal {
 };
 
 // src/ui/FolderModal.ts
-var import_obsidian6 = require("obsidian");
+var import_obsidian8 = require("obsidian");
 function matchQuery2(item, query, matcher, isNormalizeAccentsDiacritics) {
   const qs = query.split("/");
   const folder = qs.pop();
@@ -8332,7 +8985,7 @@ function stampMatchType(item, queries, isNormalizeAccentsDiacritics) {
   }
   return item;
 }
-var FolderModal = class extends import_obsidian6.SuggestModal {
+var FolderModal = class extends import_obsidian8.SuggestModal {
   constructor(app, settings) {
     super(app);
     this.modalEl.addClass("another-quick-switcher__modal-prompt");
@@ -8382,7 +9035,7 @@ var FolderModal = class extends import_obsidian6.SuggestModal {
   }
   async onChooseSuggestion(item) {
     if (!this.appHelper.enableFileExplorer()) {
-      new import_obsidian6.Notice("File explorer (core plugin) is not enabled.");
+      new import_obsidian8.Notice("File explorer (core plugin) is not enabled.");
       return;
     }
     this.appHelper.revealInFolder(item.folder);
@@ -8433,7 +9086,86 @@ var FolderModal = class extends import_obsidian6.SuggestModal {
 };
 
 // src/ui/GrepModal.ts
-var import_obsidian7 = require("obsidian");
+var import_obsidian9 = require("obsidian");
+
+// src/utils/grep-utils.ts
+function byteToCharPosition(text, bytePos) {
+  const textBytes = Buffer.from(text, "utf8");
+  if (bytePos >= textBytes.length) return text.length;
+  const codePoints = [...text];
+  let currentBytePos = 0;
+  let jsCharPos = 0;
+  for (let i = 0; i < codePoints.length; i++) {
+    const codePoint = codePoints[i];
+    const codePointBytes = Buffer.from(codePoint, "utf8").length;
+    if (currentBytePos + codePointBytes > bytePos) {
+      break;
+    }
+    currentBytePos += codePointBytes;
+    jsCharPos += codePoint.length;
+    if (currentBytePos >= bytePos) {
+      break;
+    }
+  }
+  return jsCharPos;
+}
+function convertSubmatchesToCharPositions(submatches, text) {
+  return submatches.map((submatch) => ({
+    ...submatch,
+    start: byteToCharPosition(text, submatch.start),
+    end: byteToCharPosition(text, submatch.end)
+  }));
+}
+function mergeOverlappingSubmatches(submatches, originalText) {
+  if (submatches.length <= 1) return submatches;
+  const sorted = [...submatches].filter((submatch) => {
+    if (!originalText) return true;
+    return submatch.start >= 0 && submatch.end <= originalText.length && submatch.start < submatch.end;
+  }).sort((a, b) => a.start - b.start);
+  if (sorted.length === 0) return [];
+  const deduplicated = [];
+  for (const current of sorted) {
+    const isDuplicate = deduplicated.some(
+      (existing) => existing.start === current.start && existing.end === current.end
+    );
+    if (!isDuplicate) {
+      deduplicated.push(current);
+    }
+  }
+  return deduplicated;
+}
+function mergeAndFilterResults(allResults) {
+  if (allResults.length === 0) return [];
+  if (allResults.length === 1) return allResults[0];
+  const resultsByLocation = /* @__PURE__ */ new Map();
+  for (let i = 0; i < allResults.length; i++) {
+    const results = allResults[i];
+    for (const result of results) {
+      const key = `${result.data.path.text}:${result.data.line_number}`;
+      if (!resultsByLocation.has(key)) {
+        resultsByLocation.set(key, []);
+      }
+      resultsByLocation.get(key).push(result);
+    }
+  }
+  const mergedResults = [];
+  for (const [key, locationResults] of resultsByLocation) {
+    if (locationResults.length === allResults.length) {
+      const firstResult = locationResults[0];
+      const mergedSubmatches = locationResults.flatMap(
+        (r) => r.data.submatches
+      );
+      mergedResults.push({
+        ...firstResult,
+        data: {
+          ...firstResult.data,
+          submatches: mergedSubmatches
+        }
+      });
+    }
+  }
+  return mergedResults;
+}
 
 // src/utils/ripgrep.ts
 var import_child_process = require("child_process");
@@ -8452,10 +9184,81 @@ async function rg(cmd, ...args) {
     (0, import_child_process.execFile)(
       cmd,
       ["--json", ...args],
-      { maxBuffer: 100 * 1024 * 1024 },
-      (_2, stdout, _stderr) => {
-        const results = stdout.split("\n").filter((x) => x).map((x) => JSON.parse(x)).filter((x) => x.type === "match");
+      { maxBuffer: 1024 * 1024 * 1024 },
+      (error, stdout, stderr) => {
+        if (error) {
+          if (error.message.includes("regex parse error")) {
+            resolve({
+              type: "error",
+              errorType: "regex_parse_error",
+              message: error.message
+            });
+            return;
+          }
+          if (stdout) {
+            const j = JSON.parse(stdout);
+            if (j.type === "summary" && j.data.stats.matches === 0) {
+              resolve([]);
+              return;
+            }
+          }
+          console.error("ripgrep error:", error);
+          resolve([]);
+          return;
+        }
+        const results = stdout.split("\n").filter((x) => x).map((x) => {
+          try {
+            return JSON.parse(x);
+          } catch (e) {
+            console.warn("JSON parse error for line:", x);
+            return null;
+          }
+        }).filter(
+          (x) => x !== null && x.type === "match"
+        );
         resolve(results);
+      }
+    );
+  });
+}
+async function rgFiles(cmd, queries, searchPath, extensions) {
+  return new Promise((resolve, _) => {
+    const filesArgs = [
+      "--files",
+      "--follow",
+      ...extensions.flatMap((x) => ["-t", x]),
+      searchPath
+    ].filter((x) => x);
+    (0, import_child_process.execFile)(
+      cmd,
+      filesArgs,
+      { maxBuffer: 1024 * 1024 * 1024 },
+      (error, stdout, stderr) => {
+        if (error) {
+          if (error.message.includes("No such file or directory")) {
+            resolve([]);
+            return;
+          }
+          if (stdout) {
+            const j = JSON.parse(stdout);
+            if (j.type === "summary" && j.data.stats.matches === 0) {
+              resolve([]);
+              return;
+            }
+          }
+          console.error("ripgrep files error:", error);
+          resolve([]);
+          return;
+        }
+        let files = stdout.split("\n").filter((x) => x);
+        for (const query of queries) {
+          if (!query.trim()) continue;
+          files = files.filter((filePath) => {
+            const basename2 = filePath.split("/").pop() || "";
+            return basename2.toLowerCase().includes(query.toLowerCase());
+          });
+        }
+        resolve(files);
       }
     );
   });
@@ -8467,8 +9270,8 @@ var globalInternalStorage2 = {
   basePath: void 0,
   selected: void 0
 };
-var GrepModal = class extends import_obsidian7.SuggestModal {
-  constructor(app, settings, initialLeaf) {
+var GrepModal = class extends AbstractSuggestionModal {
+  constructor(app, settings, initialLeaf, initialQuery) {
     super(app);
     this.isClosed = new Promise((resolve) => {
       this.markClosed = resolve;
@@ -8497,23 +9300,24 @@ var GrepModal = class extends import_obsidian7.SuggestModal {
       );
     }
     this.setHotkeys();
+    this.initialQuery = initialQuery;
+  }
+  toKey(item) {
+    return `${item.file.path}:${item.lineNumber}`;
   }
   onOpen() {
     var _a;
     super.onOpen();
     setFloatingModal(this.appHelper);
-    this.basePath = (_a = globalInternalStorage2.basePath) != null ? _a : "";
+    this.basePath = (_a = globalInternalStorage2.basePath) != null ? _a : this.settings.defaultGrepFolder;
+    if (this.initialQuery) {
+      this.clonedInputEl.value = this.initialQuery;
+      this.currentQuery = this.initialQuery;
+      this.inputEl.value = this.initialQuery;
+      this.inputEl.dispatchEvent(new Event("input"));
+    }
     window.setTimeout(() => {
       var _a2;
-      const selected = globalInternalStorage2.selected;
-      if (selected != null) {
-        this.chooser.setSelectedItem(selected);
-        (_a2 = this.chooser.suggestions.at(selected)) == null ? void 0 : _a2.scrollIntoView({
-          behavior: "auto",
-          block: "center",
-          inline: "center"
-        });
-      }
       this.basePathInputEl = createEl("input", {
         value: this.basePath,
         placeholder: "path from vault root (./ means current directory. ../ means parent directory)",
@@ -8569,10 +9373,61 @@ var GrepModal = class extends import_obsidian7.SuggestModal {
       );
       promptInputContainerEl == null ? void 0 : promptInputContainerEl.after(wrapper);
       wrapper.insertAdjacentHTML("afterbegin", FOLDER);
+      if (this.settings.autoPreviewInGrepSearch) {
+        this.debouncePreview = (0, import_obsidian9.debounce)(
+          this.preview,
+          this.settings.grepAutoPreviewDelayMilliSeconds,
+          true
+        );
+        this.debouncePreviewCancelListener = () => {
+          var _a3;
+          (_a3 = this.debouncePreview) == null ? void 0 : _a3.cancel();
+        };
+        this.debouncePreviewSearchCancelListener = () => {
+          var _a3;
+          (_a3 = this.debouncePreview) == null ? void 0 : _a3.cancel();
+          this.debounceInputEvent.cancel();
+        };
+        const originalSetSelectedItem = this.chooser.setSelectedItem.bind(
+          this.chooser
+        );
+        this.chooser.setSelectedItem = (selectedIndex, evt) => {
+          var _a3;
+          originalSetSelectedItem(selectedIndex, evt);
+          (_a3 = this.debouncePreview) == null ? void 0 : _a3.call(this);
+        };
+        this.clonedInputEl.addEventListener(
+          "keydown",
+          this.debouncePreviewCancelListener
+        );
+        this.clonedInputEl.addEventListener(
+          "focusout",
+          this.debouncePreviewSearchCancelListener
+        );
+        this.basePathInputEl.addEventListener(
+          "keydown",
+          this.debouncePreviewCancelListener
+        );
+        this.basePathInputEl.addEventListener(
+          "focusout",
+          this.debouncePreviewSearchCancelListener
+        );
+      }
+      const selected = globalInternalStorage2.selected;
+      if (selected != null) {
+        this.chooser.setSelectedItem(selected);
+        (_a2 = this.chooser.suggestions.at(selected)) == null ? void 0 : _a2.scrollIntoView({
+          behavior: "auto",
+          block: "center",
+          inline: "center"
+        });
+      }
     }, 0);
   }
   onClose() {
+    var _a;
     super.onClose();
+    (_a = this.debouncePreview) == null ? void 0 : _a.cancel();
     globalInternalStorage2.items = this.suggestions;
     globalInternalStorage2.basePath = this.basePath;
     globalInternalStorage2.selected = this.chooser.selectedItem;
@@ -8584,6 +9439,14 @@ var GrepModal = class extends import_obsidian7.SuggestModal {
       "input",
       this.clonedInputElInputEventListener
     );
+    this.clonedInputEl.removeEventListener(
+      "keydown",
+      this.debouncePreviewCancelListener
+    );
+    this.clonedInputEl.removeEventListener(
+      "focusout",
+      this.debouncePreviewSearchCancelListener
+    );
     this.basePathInputEl.removeEventListener(
       "change",
       this.basePathInputElChangeEventListener
@@ -8592,35 +9455,110 @@ var GrepModal = class extends import_obsidian7.SuggestModal {
       "keydown",
       this.basePathInputElKeydownEventListener
     );
+    this.basePathInputEl.removeEventListener(
+      "keydown",
+      this.debouncePreviewCancelListener
+    );
+    this.basePathInputEl.removeEventListener(
+      "focusout",
+      this.debouncePreviewSearchCancelListener
+    );
     if (this.stateToRestore) {
       this.navigate(() => this.stateToRestore.restore());
     }
     this.navigate(this.markClosed);
   }
   async searchSuggestions(query) {
-    var _a;
+    var _a, _b, _c, _d;
     const start = performance.now();
-    (_a = this.countInputEl) == null ? void 0 : _a.remove();
+    const absolutePathFromRoot = normalizeRelativePath(
+      this.basePath,
+      this.appHelper.getCurrentDirPath()
+    );
+    const queries = smartWhitespaceSplit(query.trim());
+    let rgResults;
+    for (const singleQuery of queries) {
+      if (!isValidRegex(singleQuery)) {
+        (_a = this.countInputEl) == null ? void 0 : _a.remove();
+        this.countInputEl = createDiv({
+          text: `Invalid regex pattern: ${singleQuery}`,
+          cls: "another-quick-switcher__grep__count-input another-quick-switcher__grep__count-input--error"
+        });
+        this.clonedInputEl.before(this.countInputEl);
+        return [];
+      }
+    }
+    (_b = this.countInputEl) == null ? void 0 : _b.remove();
     this.countInputEl = createDiv({
       text: "searching...",
       cls: "another-quick-switcher__grep__count-input"
     });
     this.clonedInputEl.before(this.countInputEl);
-    const absolutePathFromRoot = normalizeRelativePath(
-      this.basePath,
-      this.appHelper.getCurrentDirPath()
-    );
-    const rgResults = await rg(
-      this.settings.ripgrepCommand,
-      ...[
+    if (queries.length > 1) {
+      const allResults = [];
+      for (const singleQuery of queries) {
+        const results = await rg(
+          this.settings.ripgrepCommand,
+          ...[
+            ...this.settings.grepExtensions.flatMap((x) => ["-t", x]),
+            hasCapitalLetter(singleQuery) ? "" : "-i",
+            "--follow",
+            "--",
+            singleQuery,
+            `${this.vaultRootPath}/${absolutePathFromRoot}`
+          ].filter((x) => x)
+        );
+        if (Array.isArray(results)) {
+          allResults.push(results);
+        } else if (results.type === "error" && results.errorType === "regex_parse_error") {
+          (_c = this.countInputEl) == null ? void 0 : _c.remove();
+          this.countInputEl = createDiv({
+            text: `Invalid regex pattern: ${singleQuery}`,
+            cls: "another-quick-switcher__grep__count-input another-quick-switcher__grep__count-input--error"
+          });
+          this.clonedInputEl.before(this.countInputEl);
+          return [];
+        }
+      }
+      rgResults = mergeAndFilterResults(allResults);
+    } else {
+      const singleQuery = queries[0];
+      const rgArgs = [
         ...this.settings.grepExtensions.flatMap((x) => ["-t", x]),
-        hasCapitalLetter(query) ? "" : "-i",
+        hasCapitalLetter(singleQuery) ? "" : "-i",
+        "--follow",
         "--",
-        query,
+        singleQuery,
         `${this.vaultRootPath}/${absolutePathFromRoot}`
-      ].filter((x) => x)
-    );
-    const items = rgResults.map((x) => {
+      ].filter((x) => x);
+      const results = await rg(this.settings.ripgrepCommand, ...rgArgs);
+      if (Array.isArray(results)) {
+        rgResults = results;
+      } else if (results.type === "error" && results.errorType === "regex_parse_error") {
+        (_d = this.countInputEl) == null ? void 0 : _d.remove();
+        this.countInputEl = createDiv({
+          text: `Invalid regex pattern: ${singleQuery}`,
+          cls: "another-quick-switcher__grep__count-input another-quick-switcher__grep__count-input--error"
+        });
+        this.clonedInputEl.before(this.countInputEl);
+        return [];
+      } else {
+        rgResults = [];
+      }
+    }
+    const fileResults = this.settings.includeFilenameInGrepSearch ? await rgFiles(
+      this.settings.ripgrepCommand,
+      queries,
+      // Use ALL queries for AND search
+      `${this.vaultRootPath}/${absolutePathFromRoot}`,
+      this.settings.grepExtensions
+    ).catch((err) => {
+      if (err.includes("regex parse error")) {
+        return [];
+      }
+      throw err;
+    }) : [];
+    const rgItems = rgResults.map((x) => {
       return {
         order: -1,
         file: this.appHelper.getFileByPath(
@@ -8632,22 +9570,77 @@ var GrepModal = class extends import_obsidian7.SuggestModal {
         line: x.data.lines.text,
         lineNumber: x.data.line_number,
         offset: x.data.absolute_offset,
-        submatches: x.data.submatches
+        submatches: mergeOverlappingSubmatches(
+          convertSubmatchesToCharPositions(
+            x.data.submatches,
+            x.data.lines.text
+          ),
+          x.data.lines.text
+        ).map((submatch) => ({
+          ...submatch,
+          type: "text"
+        }))
       };
-    }).filter((x) => x.file != null).sort(sorter((x) => x.file.stat.mtime, "desc")).map((x, order) => ({ ...x, order }));
+    }).filter((x) => x.file != null).sort(sorter((x) => x.file.stat.mtime, "desc"));
+    const fileItems = fileResults.map((filePath) => {
+      const file = this.appHelper.getFileByPath(
+        normalizePath(filePath).replace(`${this.vaultRootPath}/`, "")
+      );
+      if (!file) {
+        return null;
+      }
+      const allMatches = [];
+      for (const query2 of queries) {
+        if (!query2.trim()) continue;
+        const regexpOption = hasCapitalLetter(query2) ? "g" : "gi";
+        const queryMatches = getSinglePatternMatchingLocations(
+          file.basename,
+          new RegExp(query2, regexpOption)
+        );
+        allMatches.push(
+          ...queryMatches.map((match) => ({
+            text: match.text,
+            start: match.range.start,
+            end: match.range.end
+          }))
+        );
+      }
+      return {
+        order: -1,
+        file,
+        line: "",
+        lineNumber: 0,
+        offset: 0,
+        submatches: mergeOverlappingSubmatches(
+          allMatches.map((x) => ({
+            match: { text: x.text },
+            start: x.start,
+            end: x.end
+          })),
+          file.basename
+        ).map((submatch) => ({
+          ...submatch,
+          type: "title"
+        }))
+      };
+    }).filter((x) => x != null).sort(sorter((x) => x.file.stat.mtime, "desc"));
     this.logger.showDebugLog("getSuggestions: ", start);
-    return items;
+    return fileItems.concat(rgItems).map((x, order) => ({ ...x, order }));
   }
   async getSuggestions(query) {
-    var _a;
+    var _a, _b;
     if (query) {
       this.suggestions = await this.searchSuggestions(query);
-      (_a = this.countInputEl) == null ? void 0 : _a.remove();
-      this.countInputEl = createDiv({
-        text: `${Math.min(this.suggestions.length, this.limit)} / ${this.suggestions.length}`,
-        cls: "another-quick-switcher__grep__count-input"
-      });
-      this.clonedInputEl.before(this.countInputEl);
+      if (!((_a = this.countInputEl) == null ? void 0 : _a.classList.contains(
+        "another-quick-switcher__grep__count-input--error"
+      ))) {
+        (_b = this.countInputEl) == null ? void 0 : _b.remove();
+        this.countInputEl = createDiv({
+          text: `${Math.min(this.suggestions.length, this.limit)} / ${this.suggestions.length}`,
+          cls: "another-quick-switcher__grep__count-input"
+        });
+        this.clonedInputEl.before(this.countInputEl);
+      }
     }
     return this.suggestions;
   }
@@ -8656,7 +9649,10 @@ var GrepModal = class extends import_obsidian7.SuggestModal {
     const previousPath = (_a = this.suggestions[item.order - 1]) == null ? void 0 : _a.file.path;
     const sameFileWithPrevious = previousPath === item.file.path;
     const itemDiv = createDiv({
-      cls: "another-quick-switcher__item"
+      cls: [
+        "another-quick-switcher__item",
+        this.selectedItemMap[this.toKey(item)] ? "another-quick-switcher__item__selected" : ""
+      ].filter((x) => x)
     });
     const entryDiv = createDiv({
       cls: "another-quick-switcher__item__entry"
@@ -8667,10 +9663,25 @@ var GrepModal = class extends import_obsidian7.SuggestModal {
           "another-quick-switcher__item__title",
           "another-quick-switcher__grep__item__title_entry"
         ],
-        text: item.file.basename,
         attr: {
           extension: item.file.extension
         }
+      });
+      let restLine = item.file.basename;
+      for (const x of item.submatches.filter((s) => s.type === "title")) {
+        const i = restLine.indexOf(x.match.text);
+        const before = restLine.slice(0, i);
+        titleDiv.createSpan({
+          text: before
+        });
+        titleDiv.createSpan({
+          text: x.match.text,
+          cls: "another-quick-switcher__hit_word"
+        });
+        restLine = restLine.slice(i + x.match.text.length);
+      }
+      titleDiv.createSpan({
+        text: restLine
       });
       const isExcalidrawFile = isExcalidraw(item.file);
       if (item.file.extension !== "md" || isExcalidrawFile) {
@@ -8701,28 +9712,36 @@ var GrepModal = class extends import_obsidian7.SuggestModal {
     const descriptionDiv = createDiv({
       cls: "another-quick-switcher__grep__item__description"
     });
-    let restLine = item.line;
-    for (const x of item.submatches) {
-      const i = restLine.indexOf(x.match.text);
-      const before = restLine.slice(0, i);
+    const textSubmatches = mergeOverlappingSubmatches(
+      item.submatches.filter((s) => s.type === "text"),
+      item.line
+    ).sort((a, b) => a.start - b.start);
+    let currentPos = 0;
+    for (const submatch of textSubmatches) {
+      if (submatch.start > currentPos) {
+        const beforeText = item.line.slice(currentPos, submatch.start);
+        descriptionDiv.createSpan({
+          text: trimLineByEllipsis(
+            beforeText,
+            this.settings.maxDisplayLengthAroundMatchedWord
+          )
+        });
+      }
+      descriptionDiv.createSpan({
+        text: submatch.match.text,
+        cls: "another-quick-switcher__hit_word"
+      });
+      currentPos = submatch.end;
+    }
+    if (currentPos < item.line.length) {
+      const remainingText = item.line.slice(currentPos);
       descriptionDiv.createSpan({
         text: trimLineByEllipsis(
-          before,
+          remainingText,
           this.settings.maxDisplayLengthAroundMatchedWord
         )
       });
-      descriptionDiv.createSpan({
-        text: x.match.text,
-        cls: "another-quick-switcher__hit_word"
-      });
-      restLine = restLine.slice(i + x.match.text.length);
     }
-    descriptionDiv.createSpan({
-      text: trimLineByEllipsis(
-        restLine,
-        this.settings.maxDisplayLengthAroundMatchedWord
-      )
-    });
     if (item.order < 9) {
       const hotKeyGuide = createSpan({
         cls: "another-quick-switcher__grep__item__hot-key-guide",
@@ -8738,8 +9757,8 @@ var GrepModal = class extends import_obsidian7.SuggestModal {
     this.navQueue = this.navQueue.then(cb);
   }
   async chooseCurrentSuggestion(leaf, option = {}) {
-    var _a, _b;
-    const item = (_a = this.chooser.values) == null ? void 0 : _a[this.chooser.selectedItem];
+    var _a;
+    const item = this.getSelectedItem();
     if (!item) {
       return null;
     }
@@ -8747,7 +9766,7 @@ var GrepModal = class extends import_obsidian7.SuggestModal {
       this.close();
       this.navigate(() => this.isClosed);
     } else if (leaf === "same-tab") {
-      (_b = this.stateToRestore) != null ? _b : this.stateToRestore = this.appHelper.captureState(this.initialLeaf);
+      (_a = this.stateToRestore) != null ? _a : this.stateToRestore = this.appHelper.captureState(this.initialLeaf);
     }
     this.navigate(
       () => this.appHelper.openFile(
@@ -8763,8 +9782,62 @@ var GrepModal = class extends import_obsidian7.SuggestModal {
     );
     return item.file;
   }
-  async onChooseSuggestion() {
-    await this.chooseCurrentSuggestion("same-tab");
+  async onChooseSuggestion(item, evt) {
+    await this.chooseCurrentSuggestion(toLeafType(evt));
+  }
+  toggleInput() {
+    if (document.activeElement === this.clonedInputEl) {
+      this.basePathInputEl.focus();
+    } else {
+      this.clonedInputEl.focus();
+    }
+  }
+  validateRegexInput() {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+    const query = (_b = (_a = this.clonedInputEl) == null ? void 0 : _a.value) == null ? void 0 : _b.trim();
+    if (!query) {
+      (_c = this.clonedInputEl) == null ? void 0 : _c.classList.remove(
+        "another-quick-switcher__grep__input--invalid"
+      );
+      if ((_d = this.countInputEl) == null ? void 0 : _d.classList.contains(
+        "another-quick-switcher__grep__count-input--error"
+      )) {
+        (_e = this.countInputEl) == null ? void 0 : _e.remove();
+        this.countInputEl = void 0;
+      }
+      return;
+    }
+    const queries = smartWhitespaceSplit(query);
+    let hasInvalidRegex = false;
+    let invalidQuery = "";
+    for (const singleQuery of queries) {
+      if (!isValidRegex(singleQuery)) {
+        hasInvalidRegex = true;
+        invalidQuery = singleQuery;
+        break;
+      }
+    }
+    if (hasInvalidRegex) {
+      (_f = this.clonedInputEl) == null ? void 0 : _f.classList.add(
+        "another-quick-switcher__grep__input--invalid"
+      );
+      (_g = this.countInputEl) == null ? void 0 : _g.remove();
+      this.countInputEl = createDiv({
+        text: `Invalid regex pattern: ${invalidQuery}`,
+        cls: "another-quick-switcher__grep__count-input another-quick-switcher__grep__count-input--error"
+      });
+      this.clonedInputEl.before(this.countInputEl);
+    } else {
+      (_h = this.clonedInputEl) == null ? void 0 : _h.classList.remove(
+        "another-quick-switcher__grep__input--invalid"
+      );
+      if ((_i = this.countInputEl) == null ? void 0 : _i.classList.contains(
+        "another-quick-switcher__grep__count-input--error"
+      )) {
+        (_j = this.countInputEl) == null ? void 0 : _j.remove();
+        this.countInputEl = void 0;
+      }
+    }
   }
   registerKeys(key, handler) {
     const hotkeys = this.settings.hotkeys.grep[key];
@@ -8781,6 +9854,11 @@ var GrepModal = class extends import_obsidian7.SuggestModal {
         }
       );
     }
+  }
+  async preview() {
+    await this.chooseCurrentSuggestion("same-tab", {
+      keepOpen: true
+    });
   }
   setHotkeys() {
     var _a;
@@ -8819,21 +9897,31 @@ var GrepModal = class extends import_obsidian7.SuggestModal {
       "keydown",
       this.clonedInputElKeydownEventListener
     );
-    if (this.settings.grepSearchDelayMilliSeconds > 0) {
-      this.clonedInputElInputEventListener = (0, import_obsidian7.debounce)(
-        () => {
-          this.currentQuery = this.clonedInputEl.value;
-          this.inputEl.value = this.currentQuery;
+    this.debounceInputEvent = this.settings.grepSearchDelayMilliSeconds > 0 ? (0, import_obsidian9.debounce)(
+      () => {
+        this.currentQuery = this.clonedInputEl.value;
+        this.inputEl.value = this.currentQuery;
+        this.validateRegexInput();
+        if (this.currentQuery.length >= this.settings.grepMinQueryLength) {
           this.inputEl.dispatchEvent(new Event("input"));
-        },
-        this.settings.grepSearchDelayMilliSeconds,
-        true
-      );
-      this.clonedInputEl.addEventListener(
-        "input",
-        this.clonedInputElInputEventListener
-      );
-    }
+        }
+      },
+      this.settings.grepSearchDelayMilliSeconds,
+      true
+    ) : (0, import_obsidian9.debounce)(
+      () => {
+        this.validateRegexInput();
+      },
+      0,
+      true
+    );
+    this.clonedInputElInputEventListener = () => {
+      this.debounceInputEvent();
+    };
+    this.clonedInputEl.addEventListener(
+      "input",
+      this.clonedInputElInputEventListener
+    );
     this.registerKeys("up", () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp" }));
     });
@@ -8855,8 +9943,24 @@ var GrepModal = class extends import_obsidian7.SuggestModal {
       this.basePathInputEl.value = "./";
       this.basePathInputEl.dispatchEvent(new InputEvent("change"));
     });
+    this.registerKeys("toggle input", () => {
+      this.toggleInput();
+    });
     this.registerKeys("open", async () => {
-      await this.chooseCurrentSuggestion("same-tab");
+      const items = this.getCheckedItems();
+      if (items.length > 0) {
+        this.close();
+        for (const x of items.slice()) {
+          await this.appHelper.openFile(x.file, {
+            leafType: "new-tab",
+            line: x.lineNumber - 1,
+            preventDuplicateTabs: this.settings.preventDuplicateTabs
+          });
+          await sleep(0);
+        }
+      } else {
+        await this.chooseCurrentSuggestion("same-tab");
+      }
     });
     this.registerKeys("open in new tab", async () => {
       await this.chooseCurrentSuggestion("new-tab");
@@ -8878,24 +9982,34 @@ var GrepModal = class extends import_obsidian7.SuggestModal {
         keepOpen: true
       });
     });
-    this.registerKeys("open all in new tabs", () => {
+    this.registerKeys("open all in new tabs", async () => {
       this.close();
       if (this.chooser.values == null) {
         return;
       }
       const items = this.chooser.values.slice().reverse();
       for (const x of items) {
-        this.appHelper.openFile(x.file, {
-          leafType: "new-tab-background",
+        await this.appHelper.openFile(x.file, {
+          leafType: "new-tab",
+          line: x.lineNumber - 1,
           preventDuplicateTabs: this.settings.preventDuplicateTabs
         });
+        await sleep(0);
       }
     });
-    this.registerKeys("preview", async () => {
-      await this.chooseCurrentSuggestion("same-tab", {
-        keepOpen: true
-      });
+    this.registerKeys("check/uncheck", async () => {
+      await this.toggleCheckedItem();
     });
+    this.registerKeys("check/uncheck and next", async () => {
+      await this.toggleCheckedItem({ moveNext: true });
+    });
+    this.registerKeys("check all", () => {
+      this.checkAll();
+    });
+    this.registerKeys("uncheck all", () => {
+      this.uncheckAll();
+    });
+    this.registerKeys("preview", () => this.preview());
     const modifierKey = this.settings.userAltInsteadOfModForQuickResultSelection ? "Alt" : "Mod";
     for (const n of [1, 2, 3, 4, 5, 6, 7, 8, 9]) {
       this.scope.register([modifierKey], String(n), (evt) => {
@@ -8911,8 +10025,8 @@ var GrepModal = class extends import_obsidian7.SuggestModal {
 };
 
 // src/ui/HeaderModal.ts
-var import_obsidian8 = require("obsidian");
-var HeaderModal = class extends import_obsidian8.SuggestModal {
+var import_obsidian10 = require("obsidian");
+var HeaderModal = class extends import_obsidian10.SuggestModal {
   constructor(app, settings, floating) {
     super(app);
     this.hitItems = [];
@@ -8924,6 +10038,11 @@ var HeaderModal = class extends import_obsidian8.SuggestModal {
     this.settings = settings;
     this.floating = floating;
     this.autoPreview = settings.autoPreviewInFloatingHeaderSearch && floating;
+    this.stateToRestore = this.appHelper.captureStateInFile(
+      this.appHelper.getActiveFileLeaf()
+    );
+    this.initialCursor = this.appHelper.getCurrentEditor().getCursor();
+    this.navQueue = Promise.resolve();
     this.items = this.appHelper.getHeadersInActiveFile().map((x, i) => ({
       value: excludeFormat(x.heading),
       level: x.level,
@@ -8942,6 +10061,13 @@ var HeaderModal = class extends import_obsidian8.SuggestModal {
       this.select(nextIndex, unsafeEvt);
     });
     this.setHotkeys();
+  }
+  navigate(cb) {
+    this.navQueue = this.navQueue.then(cb);
+  }
+  onClose() {
+    super.onClose();
+    this.navigate(() => this.stateToRestore.restore());
   }
   select(index, evt, suppressAutoPreview) {
     var _a;
@@ -9005,7 +10131,7 @@ var HeaderModal = class extends import_obsidian8.SuggestModal {
   }
   enableFloating() {
     this.floating = true;
-    if (!import_obsidian8.Platform.isPhone) {
+    if (!import_obsidian10.Platform.isPhone) {
       setFloatingModal(this.appHelper);
     }
   }
@@ -9054,7 +10180,7 @@ var HeaderModal = class extends import_obsidian8.SuggestModal {
     el.appendChild(itemDiv);
   }
   async onChooseSuggestion(item) {
-    this.appHelper.moveTo(item.position);
+    this.appHelper.moveTo(item.position, void 0, this.initialCursor);
   }
   registerKeys(key, handler) {
     var _a;
@@ -9175,13 +10301,13 @@ var HeaderModal = class extends import_obsidian8.SuggestModal {
 };
 
 // src/ui/InFileModal.ts
-var import_obsidian9 = require("obsidian");
+var import_obsidian11 = require("obsidian");
 var globalInternalStorage3 = {
   query: "",
   selected: null
 };
-var InFileModal = class extends import_obsidian9.SuggestModal {
-  constructor(app, settings, initialLeaf) {
+var InFileModal = class extends import_obsidian11.SuggestModal {
+  constructor(app, settings) {
     super(app);
     /** !Not work correctly in all cases */
     this.unsafeSelectedIndex = 0;
@@ -9190,10 +10316,11 @@ var InFileModal = class extends import_obsidian9.SuggestModal {
     this.appHelper = new AppHelper(app);
     this.settings = settings;
     this.logger = Logger.of(this.settings);
-    this.initialLeaf = initialLeaf;
     this.floating = this.settings.autoPreviewInFloatingInFileSearch;
     this.autoPreview = settings.autoPreviewInFloatingInFileSearch;
-    this.stateToRestore = this.appHelper.captureStateInFile(this.initialLeaf);
+    this.stateToRestore = this.appHelper.captureStateInFile(
+      this.appHelper.getActiveFileLeaf()
+    );
     this.initialCursor = this.appHelper.getCurrentEditor().getCursor();
     this.navQueue = Promise.resolve();
     this.limit = 255;
@@ -9201,7 +10328,7 @@ var InFileModal = class extends import_obsidian9.SuggestModal {
     this.setPlaceholder("Type anything then shows the results");
   }
   close() {
-    if (import_obsidian9.Platform.isMobile) {
+    if (import_obsidian11.Platform.isMobile) {
       this.onClose();
     }
     super.close();
@@ -9250,9 +10377,7 @@ var InFileModal = class extends import_obsidian9.SuggestModal {
     super.onClose();
     globalInternalStorage3.query = this.inputEl.value;
     globalInternalStorage3.selected = this.chooser.values != null ? this.chooser.selectedItem : null;
-    if (this.stateToRestore) {
-      this.navigate(() => this.stateToRestore.restore());
-    }
+    this.navigate(() => this.stateToRestore.restore());
   }
   select(index, evt) {
     this.chooser.setSelectedItem(index, evt);
@@ -9290,7 +10415,7 @@ var InFileModal = class extends import_obsidian9.SuggestModal {
   }
   enableFloating() {
     this.floating = true;
-    if (!import_obsidian9.Platform.isPhone) {
+    if (!import_obsidian11.Platform.isPhone) {
       setFloatingModal(this.appHelper);
     }
   }
@@ -9307,7 +10432,7 @@ var InFileModal = class extends import_obsidian9.SuggestModal {
     var _a;
     const start = performance.now();
     const isQueryEmpty = query.trim() === "";
-    const queries = query.trim().split(" ");
+    const queries = smartWhitespaceSplit(query.trim());
     this.currentQueriesRegExp = new RegExp(
       queries.map(escapeRegExp).join("|"),
       "gi"
@@ -9489,6 +10614,20 @@ var InFileModal = class extends import_obsidian9.SuggestModal {
     this.registerKeys("down", (evt) => {
       navigateNext(evt);
     });
+    this.registerKeys("insert to editor", async () => {
+      var _a;
+      const item = (_a = this.chooser.values) == null ? void 0 : _a[this.chooser.selectedItem];
+      if (!item) {
+        return;
+      }
+      const editor = this.appHelper.getCurrentEditor();
+      if (!editor) {
+        return;
+      }
+      editor.setCursor(this.initialCursor);
+      this.appHelper.insertStringToActiveFile(item.line);
+      this.close();
+    });
     this.registerKeys("show all results", () => {
       this.limit = Number.MAX_SAFE_INTEGER;
       this.inputEl.dispatchEvent(new Event("input"));
@@ -9518,8 +10657,8 @@ var InFileModal = class extends import_obsidian9.SuggestModal {
 };
 
 // src/ui/LinkModal.ts
-var import_obsidian10 = require("obsidian");
-var LinkModal = class extends import_obsidian10.SuggestModal {
+var import_obsidian12 = require("obsidian");
+var LinkModal = class extends import_obsidian12.SuggestModal {
   constructor(app, settings, initialLeaf) {
     super(app);
     this.lastOpenFileIndexByPath = {};
@@ -9541,7 +10680,7 @@ var LinkModal = class extends import_obsidian10.SuggestModal {
       this.lastOpenFileIndexByPath[v] = i;
     });
     this.setHotkeys();
-    this.debounceGetSuggestions = (0, import_obsidian10.debounce)(
+    this.debounceGetSuggestions = (0, import_obsidian12.debounce)(
       (query, cb) => {
         cb(this._getSuggestions(query));
       },
@@ -9554,7 +10693,7 @@ var LinkModal = class extends import_obsidian10.SuggestModal {
   }
   onOpen() {
     super.onOpen();
-    if (!import_obsidian10.Platform.isPhone) {
+    if (!import_obsidian12.Platform.isPhone) {
       setFloatingModal(this.appHelper);
     }
     this.opened = true;
@@ -9566,7 +10705,7 @@ var LinkModal = class extends import_obsidian10.SuggestModal {
     }
     this.navigate(this.markClosed);
   }
-  async indexingItems() {
+  indexingItems() {
     const ignoredItems = [];
     const links = this.appHelper.getLinksByFilePathInActiveFile();
     if (!links) {
@@ -9575,16 +10714,21 @@ var LinkModal = class extends import_obsidian10.SuggestModal {
     for (const [path, caches] of Object.entries(links)) {
       const file = this.appHelper.getFileByPath(path);
       const content = this.appHelper.getCurrentEditor().getValue();
-      for (const cache of caches) {
-        if (!isFrontMatterLinkCache(cache)) {
-          ignoredItems.push({
-            file,
-            displayLink: cache.displayText,
-            line: content.split("\n").at(cache.position.start.line),
-            lineNumber: cache.position.start.line + 1,
-            offset: cache.position.start.offset
-          });
-        }
+      const noFrontmatterLinkCaches = caches.filter(
+        (x) => !isFrontMatterLinkCache(x)
+      );
+      const uniqueCaches = uniqBy(
+        noFrontmatterLinkCaches,
+        (x) => x.position.start.line
+      );
+      for (const cache of uniqueCaches) {
+        ignoredItems.push({
+          file,
+          displayLink: cache.displayText,
+          line: content.split("\n").at(cache.position.start.line),
+          lineNumber: cache.position.start.line + 1,
+          offset: cache.position.start.offset
+        });
       }
     }
     this.ignoredItems = ignoredItems;
@@ -9721,8 +10865,8 @@ var LinkModal = class extends import_obsidian10.SuggestModal {
     );
     return this.appHelper.getActiveFile();
   }
-  async onChooseSuggestion() {
-    await this.chooseCurrentSuggestion("same-tab");
+  async onChooseSuggestion(item, evt) {
+    await this.chooseCurrentSuggestion(toLeafType(evt));
   }
   registerKeys(key, handler) {
     var _a;
@@ -9788,17 +10932,19 @@ var LinkModal = class extends import_obsidian10.SuggestModal {
         keepOpen: true
       });
     });
-    this.registerKeys("open all in new tabs", () => {
+    this.registerKeys("open all in new tabs", async () => {
       this.close();
       if (this.chooser.values == null) {
         return;
       }
-      const files = this.chooser.values.slice().reverse().map((x) => x.file).filter(isPresent);
-      for (const x of files) {
-        this.appHelper.openFile(x, {
-          leafType: "new-tab-background",
+      const items = this.chooser.values.slice().reverse();
+      for (const item of items) {
+        await this.appHelper.openFile(this.appHelper.getActiveFile(), {
+          leafType: "new-tab",
+          line: item.lineNumber - 1,
           preventDuplicateTabs: this.settings.preventDuplicateTabs
         });
+        await sleep(0);
       }
     });
     this.registerKeys("show all results", () => {
@@ -9826,7 +10972,60 @@ var LinkModal = class extends import_obsidian10.SuggestModal {
 
 // src/ui/MoveModal.ts
 var import_moment = __toESM(require_moment());
-var import_obsidian11 = require("obsidian");
+var import_obsidian13 = require("obsidian");
+function mergeRanges2(ranges) {
+  if (ranges.length === 0) return [];
+  const sorted = [...ranges].sort((a, b) => a.start - b.start);
+  const merged = [];
+  let current = sorted[0];
+  for (let i = 1; i < sorted.length; i++) {
+    const next = sorted[i];
+    if (next.start <= current.end + 1) {
+      current = {
+        start: current.start,
+        end: Math.max(current.end, next.end)
+      };
+    } else {
+      merged.push(current);
+      current = next;
+    }
+  }
+  merged.push(current);
+  return merged;
+}
+function createHighlightedText2(text, ranges) {
+  const fragment = document.createDocumentFragment();
+  if (!ranges || ranges.length === 0) {
+    fragment.appendChild(document.createTextNode(text));
+    return fragment;
+  }
+  const mergedRanges = mergeRanges2(ranges);
+  let lastEnd = -1;
+  for (const range2 of mergedRanges) {
+    if (range2.start > lastEnd + 1) {
+      const beforeText = text.slice(lastEnd + 1, range2.start);
+      if (beforeText) {
+        fragment.appendChild(document.createTextNode(beforeText));
+      }
+    }
+    const highlightedText = text.slice(range2.start, range2.end + 1);
+    if (highlightedText) {
+      const highlightSpan = createSpan({
+        cls: "another-quick-switcher__hit_word",
+        text: highlightedText
+      });
+      fragment.appendChild(highlightSpan);
+    }
+    lastEnd = range2.end;
+  }
+  if (lastEnd + 1 < text.length) {
+    const remainingText = text.slice(lastEnd + 1);
+    if (remainingText) {
+      fragment.appendChild(document.createTextNode(remainingText));
+    }
+  }
+  return fragment;
+}
 function matchQuery3(item, query, matcher, isNormalizeAccentsDiacritics) {
   const qs = query.split("/");
   const folder = qs.pop();
@@ -9847,21 +11046,35 @@ function matchQueryAll3(item, queries, matcher, isNormalizeAccentsDiacritics) {
   );
 }
 function stampMatchType2(item, queries, isNormalizeAccentsDiacritics) {
-  if (matchQueryAll3(
-    item,
-    queries,
-    (item2, query) => smartStartsWith(item2.folder.name, query, isNormalizeAccentsDiacritics),
+  var _a;
+  const combinedQuery = queries.join(" ");
+  const fuzzyResult = smartMicroFuzzy(
+    item.folder.name,
+    combinedQuery,
     isNormalizeAccentsDiacritics
-  )) {
-    return { ...item, matchType: "prefix-name" };
-  }
-  if (matchQueryAll3(
-    item,
-    queries,
-    (item2, query) => smartIncludes(item2.folder.name, query, isNormalizeAccentsDiacritics),
-    isNormalizeAccentsDiacritics
-  )) {
-    return { ...item, matchType: "name" };
+  );
+  switch (fuzzyResult.type) {
+    case "starts-with":
+      return {
+        ...item,
+        matchType: "prefix-name",
+        score: fuzzyResult.score,
+        ranges: fuzzyResult.ranges
+      };
+    case "includes":
+      return {
+        ...item,
+        matchType: "name",
+        score: fuzzyResult.score,
+        ranges: fuzzyResult.ranges
+      };
+    case "fuzzy":
+      return {
+        ...item,
+        matchType: "fuzzy-name",
+        score: fuzzyResult.score,
+        ranges: fuzzyResult.ranges
+      };
   }
   if (matchQueryAll3(
     item,
@@ -9869,13 +11082,53 @@ function stampMatchType2(item, queries, isNormalizeAccentsDiacritics) {
     (item2, query) => smartIncludes(item2.folder.path, query, isNormalizeAccentsDiacritics),
     isNormalizeAccentsDiacritics
   )) {
-    return { ...item, matchType: "directory" };
+    const parentName = ((_a = item.folder.parent) == null ? void 0 : _a.name) || "";
+    const directoryFuzzyResult = smartMicroFuzzy(
+      parentName,
+      combinedQuery,
+      isNormalizeAccentsDiacritics
+    );
+    return {
+      ...item,
+      matchType: "directory",
+      directoryRanges: directoryFuzzyResult.ranges
+    };
   }
   return item;
 }
-var MoveModal = class extends import_obsidian11.SuggestModal {
+function stampRecentlyUsed(item, recentFolders) {
+  const index = recentFolders.indexOf(item.folder.path);
+  if (index !== -1) {
+    return {
+      ...item,
+      isRecentlyUsed: true,
+      recentlyUsedIndex: index
+    };
+  }
+  return item;
+}
+function sortFolders(items, priority) {
+  return items.sort((a, b) => {
+    var _a, _b;
+    switch (priority) {
+      case "Recently used": {
+        const aIndex = (_a = a.recentlyUsedIndex) != null ? _a : 999999;
+        const bIndex = (_b = b.recentlyUsedIndex) != null ? _b : 999999;
+        return aIndex - bIndex;
+      }
+      case "Alphabetical":
+        return a.folder.name.localeCompare(b.folder.name);
+      case "Alphabetical reverse":
+        return b.folder.name.localeCompare(a.folder.name);
+      default:
+        return 0;
+    }
+  });
+}
+var MoveModal = class extends import_obsidian13.SuggestModal {
   constructor(app, settings) {
     super(app);
+    this.recentFolders = [];
     this.modalEl.addClass("another-quick-switcher__modal-prompt");
     this.appHelper = new AppHelper(app);
     this.settings = settings;
@@ -9889,16 +11142,61 @@ var MoveModal = class extends import_obsidian11.SuggestModal {
       (x) => x.folder.path
     );
   }
+  async onOpen() {
+    await this.loadRecentlyUsedFolders();
+    super.onOpen();
+  }
+  getRecentlyUsedFilePath() {
+    return this.settings.moveFileRecentlyUsedFilePath || ".obsidian/plugins/obsidian-another-quick-switcher/recently-used-folders.json";
+  }
+  async loadRecentlyUsedFolders() {
+    const filePath = this.getRecentlyUsedFilePath();
+    try {
+      if (await this.app.vault.adapter.exists(filePath)) {
+        const content = await this.app.vault.adapter.read(filePath);
+        this.recentFolders = JSON.parse(content);
+      }
+    } catch (error) {
+      console.warn("Failed to load recently used folders:", error);
+      this.recentFolders = [];
+    }
+  }
+  async saveRecentlyUsedFolders() {
+    const filePath = this.getRecentlyUsedFilePath();
+    try {
+      const dir = filePath.substring(0, filePath.lastIndexOf("/"));
+      if (!await this.app.vault.adapter.exists(dir)) {
+        await this.app.vault.adapter.mkdir(dir);
+      }
+      await this.app.vault.adapter.write(
+        filePath,
+        JSON.stringify(this.recentFolders, null, 2)
+      );
+    } catch (error) {
+      console.warn("Failed to save recently used folders:", error);
+    }
+  }
+  async updateRecentlyUsedFolder(folderPath) {
+    const index = this.recentFolders.indexOf(folderPath);
+    if (index > -1) {
+      this.recentFolders.splice(index, 1);
+    }
+    this.recentFolders.unshift(folderPath);
+    if (this.recentFolders.length > this.settings.moveFileMaxRecentlyUsedFolders) {
+      this.recentFolders.pop();
+    }
+    await this.saveRecentlyUsedFolders();
+  }
   getSuggestions(query) {
     const qs = query.split(" ").filter((x) => x);
-    return this.filteredItems.map(
+    const matchedItems = this.filteredItems.map(
       (x) => stampMatchType2(x, qs, this.settings.normalizeAccentsAndDiacritics)
-    ).filter((x) => x.matchType).sort(sorter((x) => x.matchType === "directory" ? 1 : 0)).sort(
-      sorter(
-        (x) => x.matchType === "prefix-name" ? 1e3 - x.folder.name.length : 0,
-        "desc"
-      )
-    ).slice(0, 10);
+    ).filter((x) => x.matchType).map((x) => stampRecentlyUsed(x, this.recentFolders));
+    const sortedItems = sortFolders(
+      matchedItems,
+      this.settings.moveFolderSortPriority
+    );
+    return sortedItems.slice(0, 10);
   }
   renderSuggestion(item, el) {
     var _a;
@@ -9912,15 +11210,29 @@ var MoveModal = class extends import_obsidian11.SuggestModal {
       cls: "another-quick-switcher__item__entry"
     });
     const folderDiv = createDiv({
-      cls: "another-quick-switcher__item__title",
-      text: item.folder.name
+      cls: "another-quick-switcher__item__title"
     });
+    const highlightedContent = createHighlightedText2(
+      item.folder.name,
+      item.ranges
+    );
+    folderDiv.appendChild(highlightedContent);
     entryDiv.appendChild(folderDiv);
     const directoryDiv = createDiv({
       cls: "another-quick-switcher__item__directory"
     });
     directoryDiv.insertAdjacentHTML("beforeend", FOLDER);
-    directoryDiv.appendText(` ${(_a = item.folder.parent) == null ? void 0 : _a.name}`);
+    const parentName = ((_a = item.folder.parent) == null ? void 0 : _a.name) || "";
+    if (item.matchType === "directory" && item.directoryRanges) {
+      directoryDiv.appendText(" ");
+      const directoryHighlightedContent = createHighlightedText2(
+        parentName,
+        item.directoryRanges
+      );
+      directoryDiv.appendChild(directoryHighlightedContent);
+    } else {
+      directoryDiv.appendText(` ${parentName}`);
+    }
     entryDiv.appendChild(directoryDiv);
     itemDiv.appendChild(entryDiv);
     el.appendChild(itemDiv);
@@ -9934,11 +11246,12 @@ var MoveModal = class extends import_obsidian11.SuggestModal {
     if (await this.appHelper.exists(newPath)) {
       const newName = `${activeFile.basename}.${(0, import_moment.default)().format("YYYYMMDD_HHmmss_SSS")}.${activeFile.extension}`;
       newPath = `${item.folder.path}/${newName}`;
-      new import_obsidian11.Notice(
+      new import_obsidian13.Notice(
         `Since a file with the same name already exists in the destination directory, it will be moved and renamed ${newName}`
       );
     }
     await this.app.fileManager.renameFile(activeFile, newPath);
+    await this.updateRecentlyUsedFolder(item.folder.path);
   }
   registerKeys(key, handler) {
     var _a;
@@ -9989,8 +11302,8 @@ var MoveModal = class extends import_obsidian11.SuggestModal {
 var SEARCH_COMMAND_PREFIX = "search-command";
 function showSearchDialog(app, settings, command) {
   var _a, _b, _c, _d;
-  const activeFileLeaf = (_b = (_a = app.workspace.getActiveViewOfType(import_obsidian12.FileView)) == null ? void 0 : _a.leaf) != null ? _b : null;
-  const editor = (_d = (_c = app.workspace.getActiveViewOfType(import_obsidian12.MarkdownView)) == null ? void 0 : _c.editor) != null ? _d : null;
+  const activeFileLeaf = (_b = (_a = app.workspace.getActiveViewOfType(import_obsidian14.FileView)) == null ? void 0 : _a.leaf) != null ? _b : null;
+  const editor = (_d = (_c = app.workspace.getActiveViewOfType(import_obsidian14.MarkdownView)) == null ? void 0 : _c.editor) != null ? _d : null;
   const modal = new AnotherQuickSwitcherModal({
     app,
     settings,
@@ -10015,20 +11328,20 @@ function showMoveDialog(app, settings) {
   const modal = new MoveModal(app, settings);
   modal.open();
 }
-async function showGrepDialog(app, settings) {
+async function showGrepDialog(app, settings, initialQuery) {
   var _a, _b;
-  if (!import_obsidian12.Platform.isDesktop) {
-    new import_obsidian12.Notice("Grep is not supported on mobile.");
+  if (!import_obsidian14.Platform.isDesktop) {
+    new import_obsidian14.Notice("Grep is not supported on mobile.");
     return;
   }
   if (!await existsRg(settings.ripgrepCommand)) {
-    new import_obsidian12.Notice(
+    new import_obsidian14.Notice(
       `"${settings.ripgrepCommand}" was not working as a ripgrep command. If you have not installed ripgrep yet, please install it.`
     );
     return;
   }
-  const activeFileLeaf = (_b = (_a = app.workspace.getActiveViewOfType(import_obsidian12.FileView)) == null ? void 0 : _a.leaf) != null ? _b : null;
-  const modal = new GrepModal(app, settings, activeFileLeaf);
+  const activeFileLeaf = (_b = (_a = app.workspace.getActiveViewOfType(import_obsidian14.FileView)) == null ? void 0 : _a.leaf) != null ? _b : null;
+  const modal = new GrepModal(app, settings, activeFileLeaf, initialQuery);
   modal.open();
 }
 async function showBacklinkDialog(app, settings) {
@@ -10036,7 +11349,7 @@ async function showBacklinkDialog(app, settings) {
   if (!app.workspace.getActiveFile()) {
     return;
   }
-  const activeFileLeaf = (_b = (_a = app.workspace.getActiveViewOfType(import_obsidian12.FileView)) == null ? void 0 : _a.leaf) != null ? _b : null;
+  const activeFileLeaf = (_b = (_a = app.workspace.getActiveViewOfType(import_obsidian14.FileView)) == null ? void 0 : _a.leaf) != null ? _b : null;
   const modal = new BacklinkModal(app, settings, activeFileLeaf);
   await modal.init();
   modal.open();
@@ -10046,18 +11359,16 @@ async function showLinkDialog(app, settings) {
   if (!app.workspace.getActiveFile()) {
     return;
   }
-  const activeFileLeaf = (_b = (_a = app.workspace.getActiveViewOfType(import_obsidian12.FileView)) == null ? void 0 : _a.leaf) != null ? _b : null;
+  const activeFileLeaf = (_b = (_a = app.workspace.getActiveViewOfType(import_obsidian14.FileView)) == null ? void 0 : _a.leaf) != null ? _b : null;
   const modal = new LinkModal(app, settings, activeFileLeaf);
   await modal.init();
   modal.open();
 }
 async function showInFileDialog(app, settings) {
-  var _a, _b;
   if (!app.workspace.getActiveFile()) {
     return;
   }
-  const activeFileLeaf = (_b = (_a = app.workspace.getActiveViewOfType(import_obsidian12.FileView)) == null ? void 0 : _a.leaf) != null ? _b : null;
-  const modal = new InFileModal(app, settings, activeFileLeaf);
+  const modal = new InFileModal(app, settings);
   await modal.init();
   modal.open();
 }
@@ -10115,7 +11426,7 @@ function createCommands(app, settings) {
       hotkeys: [],
       checkCallback: (checking) => {
         if (checking) {
-          return import_obsidian12.Platform.isDesktop;
+          return import_obsidian14.Platform.isDesktop;
         }
         showGrepDialog(app, settings);
       }
@@ -10167,7 +11478,7 @@ function createCommands(app, settings) {
 }
 
 // src/main.ts
-var AnotherQuickSwitcher = class extends import_obsidian13.Plugin {
+var AnotherQuickSwitcher = class extends import_obsidian15.Plugin {
   async onload() {
     this.appHelper = new AppHelper(this.app);
     await this.loadSettings();
